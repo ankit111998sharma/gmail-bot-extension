@@ -55,3 +55,24 @@ def test_sender_filter(settings: Settings) -> None:
     assert matches_filters(make_message(), settings) is True
     other = make_message(sender="Bob <bob@example.com>")
     assert matches_filters(other, settings) is False
+
+
+def test_style_fetch_failure_is_not_retried(settings: Settings, store) -> None:
+    class FailingStyleGmail(FakeGmail):
+        def __init__(self, messages):
+            super().__init__(messages)
+            self.fetch_calls = 0
+
+        def fetch_sent_examples(self, limit: int = 20):
+            self.fetch_calls += 1
+            raise RuntimeError("quota exceeded")
+
+    message = make_message()
+    gmail = FailingStyleGmail([message])
+    bot = InboxBot(settings=settings, store=store, gmail=gmail)
+
+    assert bot.process_once() == 1
+    assert bot.process_once() == 0
+    assert gmail.fetch_calls == 1
+    assert bot._style_loaded is True
+    assert len(gmail.drafts) == 1

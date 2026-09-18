@@ -165,6 +165,7 @@ class InboxBot:
             examples = self.gmail.fetch_sent_examples(self.settings.sent_example_limit)
         except Exception as exc:  # noqa: BLE001
             logger.warning("Could not load sent-mail style examples: %s", exc, extra={"event": "style_fetch_failed"})
+            self._style_loaded = True
             return
         self._style_cache = examples
         self._style_loaded = True
