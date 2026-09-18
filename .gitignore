@@ -16,7 +16,7 @@ htmlcov/
 !.env.example
 credentials.json
 token.json
-data/gmail/
+data/gmail/*
 !data/gmail/.gitkeep
 
 # Runtime data

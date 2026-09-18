@@ -1,0 +1,16 @@
+{
+  "faqs": [
+    {
+      "question": "What are your support hours?",
+      "answer": "Support hours are 9 AM to 6 PM IST, Monday to Friday."
+    },
+    {
+      "question": "Do you auto-send email replies?",
+      "answer": "No. This assistant only creates Gmail drafts. A human must review and send."
+    },
+    {
+      "question": "How do I stop the bot?",
+      "answer": "Use Stop bot in the dashboard, or press Ctrl+C in the CLI poll loop."
+    }
+  ]
+}
