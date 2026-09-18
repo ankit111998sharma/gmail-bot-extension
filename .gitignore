@@ -1,0 +1,39 @@
+# Python
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Secrets and local Gmail OAuth
+.env
+.env.*
+!.env.example
+credentials.json
+token.json
+data/gmail/
+!data/gmail/.gitkeep
+
+# Runtime data
+data/*.db
+data/*.sqlite
+*.db
+logs/
+uploads/
+
+# Build / portable bundles
+build/
+dist/
+*.spec.bak
+
+# Editors / OS
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+*.log
