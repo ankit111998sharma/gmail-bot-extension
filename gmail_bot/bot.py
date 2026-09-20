@@ -499,13 +499,10 @@ class InboxBot:
         if not reply_recipient(message, owner_email):
             raise RuntimeError("Could not find who to reply to. Open the other person's message.")
         existing = self.store.get_queue_item(message.message_id)
-        if replace_existing and existing and existing.get("draft_id"):
-            deleter = getattr(self.gmail, "delete_draft", None)
-            if callable(deleter):
-                try:
-                    deleter(str(existing["draft_id"]))
-                except Exception:  # noqa: BLE001
-                    logger.warning("Could not remove previous draft", extra={"event": "draft_replace_failed"})
+        gmail_draft_id, gmail_draft_text = self._lookup_thread_draft(message.thread_id)
+        if not (existing_draft or "").strip():
+            existing_draft = gmail_draft_text or ((existing or {}).get("draft_preview") or "")
+        draft_id_to_update = str((existing or {}).get("draft_id") or gmail_draft_id or "")
         attempts = int(existing["attempts"]) + 1 if existing else 1
         self.store.upsert_queue(
             {
@@ -534,7 +531,7 @@ class InboxBot:
             rules=rules or [],
             notes=notes,
         )
-        draft_id = self.gmail.create_draft_reply(message, draft.text, from_email=owner_email)
+        draft_id = self._save_draft_reply(message, draft.text, owner_email, draft_id_to_update)
         try:
             self.gmail.apply_label(message.message_id, self.settings.label_name)
         except Exception as exc:  # noqa: BLE001
@@ -572,6 +569,36 @@ class InboxBot:
             },
         )
         return {"text": draft.text, "draft_id": draft_id, "suggestions": draft.suggestions}
+
+    def _lookup_thread_draft(self, thread_id: str) -> tuple[str, str]:
+        finder = getattr(self.gmail, "find_thread_draft", None)
+        if not callable(finder) or not (thread_id or "").strip():
+            return "", ""
+        try:
+            found = finder(thread_id)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Could not look up an existing Gmail draft: %s", exc, extra={"event": "draft_lookup_failed"})
+            return "", ""
+        if not found:
+            return "", ""
+        draft_id = str(found[0] or "")
+        text = str(found[1] or "") if len(found) > 1 else ""
+        return draft_id, text
+
+    def _save_draft_reply(self, message: ParsedMessage, text: str, owner_email: str, draft_id: str) -> str:
+        updater = getattr(self.gmail, "update_draft_reply", None)
+        if draft_id and callable(updater):
+            try:
+                return updater(draft_id, message, text, from_email=owner_email)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("Could not update existing draft: %s", exc, extra={"event": "draft_update_failed"})
+                deleter = getattr(self.gmail, "delete_draft", None)
+                if callable(deleter):
+                    try:
+                        deleter(draft_id)
+                    except Exception:  # noqa: BLE001
+                        logger.warning("Could not remove previous draft", extra={"event": "draft_replace_failed"})
+        return self.gmail.create_draft_reply(message, text, from_email=owner_email)
 
     def _process_message(self, message_id: str) -> bool:
         message = self.gmail.get_message(message_id)

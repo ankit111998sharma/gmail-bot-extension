@@ -174,8 +174,9 @@ def test_click_redrafts_existing_draft_with_rules_url(settings: Settings, store,
         rules_url="https://kuk.ac.in/fee-rules",
     )
     text = result["draftText"]
-    assert "I hope" in text
-    assert "resolved" in text.lower()
+    assert "Dear Rachana" in text
+    assert "I hope" in text or "Please confirm" in text
+    assert "resolved" in text.lower() or "deadline" in text.lower()
     assert "as discussed on call" not in text.lower()
     assert result["suggestions"]
     assert "deadline" in " ".join(result["suggestions"]).lower() or "deadline" in text.lower()
@@ -262,4 +263,25 @@ def test_redraft_uses_saved_preview_when_compose_empty(settings: Settings, store
     text = result["draftText"].lower()
     assert result["draft_id"] != first["draft_id"] or len(gmail.drafts) == 1
     assert "9" in text or "support" in text or "please mention" in text
+    assert gmail.send_called is False
+
+
+def test_click_modifies_existing_draft_in_place(settings: Settings, store) -> None:
+    message = make_message()
+    gmail = FakeGmail([message])
+    bot = InboxBot(settings=settings, store=store, gmail=gmail)
+    first = bot.draft_from_open_mail("Ada <ada@example.com>", "Office hours?", "what are hours?")
+    result = bot.draft_from_open_mail(
+        "Ada <ada@example.com>",
+        "Office hours?",
+        "what are hours?",
+        existing_draft="hello please confirm the office hours",
+    )
+    assert len(gmail.drafts) == 1
+    assert gmail.drafts[0]["id"] == first["draft_id"]
+    assert result["draft_id"] == first["draft_id"]
+    text = result["draftText"]
+    assert "Dear Ada" in text
+    assert "please confirm" in text.lower() or "office hours" in text.lower()
+    assert "Best regards" in text
     assert gmail.send_called is False

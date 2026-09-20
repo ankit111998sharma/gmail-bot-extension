@@ -31,6 +31,10 @@ class GmailPort(Protocol):
     def list_message_ids(self, query: str, limit: int = 10) -> list[str]: ...
     def get_message(self, message_id: str) -> ParsedMessage: ...
     def create_draft_reply(self, message: ParsedMessage, reply_text: str, from_email: str = "") -> str: ...
+    def update_draft_reply(
+        self, draft_id: str, message: ParsedMessage, reply_text: str, from_email: str = ""
+    ) -> str: ...
+    def find_thread_draft(self, thread_id: str) -> tuple[str, str]: ...
     def delete_draft(self, draft_id: str) -> None: ...
     def apply_label(self, message_id: str, label_name: str) -> None: ...
     def fetch_sent_examples(self, limit: int = 20) -> list[StyleExample]: ...
@@ -276,6 +280,46 @@ class GmailAdapter:
             },
         )
         return draft_id
+
+    def update_draft_reply(
+        self, draft_id: str, message: ParsedMessage, reply_text: str, from_email: str = ""
+    ) -> str:
+        if not draft_id:
+            return self.create_draft_reply(message, reply_text, from_email=from_email)
+        body = build_draft_payload(message, reply_text, from_email=from_email)
+        request = self.service.users().drafts().update(userId=USER, id=draft_id, body=body)
+        result = self._call(request)
+        updated = result.get("id") or draft_id
+        logger.info(
+            "Updated draft",
+            extra={
+                "event": "draft_updated",
+                "message_id": message.message_id,
+                "thread_id": message.thread_id,
+                "draft_id": updated,
+                "sender": message.sender,
+                "subject": message.subject,
+                "snippet": message.log_snippet,
+            },
+        )
+        return updated
+
+    def find_thread_draft(self, thread_id: str) -> tuple[str, str]:
+        want = (thread_id or "").strip()
+        if not want:
+            return "", ""
+        result = self._call(self.service.users().drafts().list(userId=USER, maxResults=40))
+        for item in result.get("drafts") or []:
+            message = item.get("message") or {}
+            if (message.get("threadId") or "") != want:
+                continue
+            draft_id = str(item.get("id") or "")
+            if not draft_id:
+                continue
+            full = self._call(self.service.users().drafts().get(userId=USER, id=draft_id, format="full"))
+            payload = (full.get("message") or {}).get("payload") or {}
+            return draft_id, extract_body(payload)
+        return "", ""
 
     def delete_draft(self, draft_id: str) -> None:
         if not draft_id:

@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Gmail Draft Bot",
-  "version": "1.4.0",
+  "version": "1.4.1",
   "description": "Click the Chrome extension icon for optional website URL and draft notes. Never sends mail.",
   "icons": {
     "16": "icons/icon16.png",

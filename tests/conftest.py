@@ -123,6 +123,25 @@ class FakeGmail:
         )
         return draft_id
 
+    def update_draft_reply(
+        self, draft_id: str, message: ParsedMessage, reply_text: str, from_email: str = ""
+    ) -> str:
+        from gmail_bot.gmail_adapter import reply_recipient
+
+        for row in self.drafts:
+            if row["id"] == draft_id:
+                row["text"] = reply_text
+                row["from"] = from_email
+                row["to"] = reply_recipient(message, from_email)
+                return draft_id
+        return self.create_draft_reply(message, reply_text, from_email=from_email)
+
+    def find_thread_draft(self, thread_id: str) -> tuple[str, str]:
+        for row in reversed(self.drafts):
+            if row.get("thread_id") == thread_id:
+                return str(row["id"]), str(row.get("text") or "")
+        return "", ""
+
     def delete_draft(self, draft_id: str) -> None:
         if not draft_id:
             return

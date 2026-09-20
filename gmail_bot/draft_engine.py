@@ -149,6 +149,61 @@ def correct_grammar(text: str) -> str:
     return "\n\n".join(fixed).strip()
 
 
+def polite_name(sender: str | None) -> str:
+    raw = (sender or "").split("<")[0].strip().strip('"')
+    if not raw or "@" in raw:
+        return ""
+    skip = {"mr", "mrs", "ms", "miss", "dr", "sir", "madam"}
+    parts = [part for part in re.split(r"\s+", raw) if part and part.lower().strip(".") not in skip]
+    if not parts:
+        return ""
+    name = parts[0]
+    if name.isupper() and len(name) > 1:
+        name = name.title()
+    if re.fullmatch(r"[A-Za-z\u0900-\u097F][A-Za-z\u0900-\u097F.'-]{0,30}", name):
+        return name
+    return ""
+
+
+def greeting_line(sender: str | None, language: str) -> str:
+    name = polite_name(sender)
+    if language == "hi":
+        return f"नमस्ते {name}," if name else "नमस्ते,"
+    return f"Dear {name}," if name else "Hello,"
+
+
+def _strip_letter_shell(text: str) -> str:
+    lines = [line.rstrip() for line in (text or "").split("\n")]
+    while lines and not lines[0].strip():
+        lines.pop(0)
+    first = lines[0].strip() if lines else ""
+    if first and re.match(r"^(hi|hello|hey|dear|नमस्ते)\b([^.]{0,40}),?\s*$", first, re.I):
+        lines = lines[1:]
+        if lines and not lines[0].strip():
+            lines = lines[1:]
+    body = "\n".join(lines).strip()
+    match = _SIGNOFF.search("\n" + body + "\n")
+    if match:
+        body = ("\n" + body + "\n")[: match.start()].strip()
+    return body
+
+
+def polish_professional(text: str, *, owner_name: str, sender: str = "", language: str = "en") -> str:
+    """Keep the meaning, but present the draft as a short professional email."""
+    cleaned = correct_grammar(strip_quoted_reply(text))
+    body = _strip_letter_shell(cleaned)
+    body = re.sub(r"^(hi|hello|hey)[.!]\s+", "", body, flags=re.I).strip()
+    if not body:
+        return cleaned
+    signoff = owner_name or "Me"
+    if language == "hi":
+        return f"{greeting_line(sender, language)}\n\n{body}\n\nधन्यवाद,\n{signoff}"
+    if not re.match(r"^(thank you|thanks|i |we |please |kindly )", body, re.I):
+        if not body.lower().startswith("thank"):
+            body = body[0].upper() + body[1:] if body else body
+    return f"{greeting_line(sender, language)}\n\n{body}\n\nBest regards,\n{signoff}"
+
+
 def relevant_rule_line(rules: list[str], hint: str) -> str:
     words = [w.lower() for w in hint.split() if len(w) > 2]
     ranked: list[tuple[int, str]] = []
@@ -219,7 +274,9 @@ def redraft_existing(
     else:
         cleaned = weave_notes(cleaned, notes)
         cleaned = weave_rule_sentence(cleaned, rules, topic_hint(message.subject))
-    return correct_grammar(cleaned)
+    return polish_professional(
+        cleaned, owner_name=owner_name, sender=message.sender, language=language
+    )
 
 
 def useful_answers(message: ParsedMessage, chunks: list[RetrievedChunk]) -> list[str]:
@@ -266,7 +323,10 @@ def build_prompt(
     return f"""You are {assistant_name} ({owner_email or "the inbox owner"}).
 Write a short first-person reply FROM you TO the other person. You are not the incoming sender.
 Rules:
+- Write a professional business email. Polite, complete sentences, no slang.
 - 2 to 4 short sentences. No subject line.
+- Start with Dear <name> when you know their name, otherwise Hello.
+- If an existing draft is provided, improve that draft. Keep the same request. Fix grammar and tone.
 - Write as yourself. Never write on behalf of {message.sender or "the sender"}.
 - Do not quote, paste, or repeat the incoming email.
 - You may mention the topic in a few words, such as: {hint}
@@ -275,7 +335,7 @@ Rules:
 - If a description is provided, follow it. Correct grammar.
 - Do not paste knowledge-base text, guidelines, FAQs, or disclaimers.
 - Do not write [DRAFT], "review before sending", or "knowledge base".
-- Sign off as {assistant_name} only.
+- Sign off with Best regards and {assistant_name} only.
 
 Incoming gist (do not quote): {gist}
 
@@ -314,36 +374,41 @@ def placeholder_reply(
     answers = useful_answers(message, chunks)
     sent_line = relevant_sent_line(examples or [], hint, message.body)
     note_line = short_snippet(" ".join((notes or "").split()), 220)
+    greet = greeting_line(message.sender, language)
     if language == "hi":
         if note_line:
-            text = f"नमस्ते,\n\n{note_line}\n\nधन्यवाद,\n{signoff}"
+            text = f"{greet}\n\n{note_line}\n\nधन्यवाद,\n{signoff}"
         elif answers:
-            text = f"नमस्ते,\n\n{answers[0]}\n\nधन्यवाद,\n{signoff}"
+            text = f"{greet}\n\n{answers[0]}\n\nधन्यवाद,\n{signoff}"
         elif sent_line:
-            text = f"नमस्ते,\n\nआपके संदेश के लिए धन्यवाद। {sent_line}\n\nधन्यवाद,\n{signoff}"
+            text = f"{greet}\n\nआपके ईमेल के लिए धन्यवाद। {sent_line}\n\nधन्यवाद,\n{signoff}"
         elif hint:
             text = (
-                f"नमस्ते,\n\n"
-                f"{hint} के बारे में आपका संदेश मिल गया है। मैं जाँच कर जल्द उत्तर दूँगा।\n\n"
+                f"{greet}\n\n"
+                f"{hint} के संबंध में आपका ईमेल प्राप्त हुआ। मैं इसकी जाँच कर शीघ्र उत्तर दूँगा।\n\n"
                 f"धन्यवाद,\n{signoff}"
             )
         else:
-            text = f"नमस्ते,\n\nआपका संदेश मिल गया है। मैं जाँच कर जल्द उत्तर दूँगा।\n\nधन्यवाद,\n{signoff}"
+            text = f"{greet}\n\nआपका ईमेल प्राप्त हुआ। मैं इसकी जाँच कर शीघ्र उत्तर दूँगा।\n\nधन्यवाद,\n{signoff}"
         return weave_rule_sentence(text, rules or [], hint)
     if note_line:
-        text = f"Hello,\n\n{note_line}\n\nBest regards,\n{signoff}"
+        text = f"{greet}\n\n{note_line}\n\nBest regards,\n{signoff}"
     elif answers:
-        text = f"Hello,\n\n{answers[0]}\n\nBest regards,\n{signoff}"
+        text = f"{greet}\n\nThank you for your email. {answers[0]}\n\nBest regards,\n{signoff}"
     elif sent_line:
-        text = f"Hello,\n\nThank you for the update. {sent_line}\n\nBest regards,\n{signoff}"
+        text = f"{greet}\n\nThank you for your email. {sent_line}\n\nBest regards,\n{signoff}"
     elif hint:
         text = (
-            f"Hello,\n\n"
-            f"I have noted your message about {hint}. I will check this and get back to you.\n\n"
+            f"{greet}\n\n"
+            f"Thank you for your email regarding {hint}. I will review this and follow up with you shortly.\n\n"
             f"Best regards,\n{signoff}"
         )
     else:
-        text = f"Hello,\n\nI have received your message. I will check this and get back to you.\n\nBest regards,\n{signoff}"
+        text = (
+            f"{greet}\n\n"
+            f"Thank you for your email. I will review this and follow up with you shortly.\n\n"
+            f"Best regards,\n{signoff}"
+        )
     return weave_rule_sentence(text, rules or [], hint)
 
 
@@ -381,6 +446,9 @@ def generate_reply(
         )
         try:
             text = correct_grammar(llm.generate(prompt).strip())
+            text = polish_professional(
+                text, owner_name=owner_name, sender=message.sender, language=language
+            )
             return DraftResult(
                 text=text.strip(),
                 engine=getattr(llm, "name", "llm"),
@@ -418,6 +486,7 @@ def generate_reply(
             )
         )
         engine = "placeholder"
+    text = polish_professional(text, owner_name=owner_name, sender=message.sender, language=language)
     return DraftResult(
         text=text.strip(),
         engine=engine,

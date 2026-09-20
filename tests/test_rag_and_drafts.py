@@ -59,7 +59,7 @@ def test_missing_context_flag() -> None:
     message = make_message(body="What is the secret launch date?")
     draft = generate_reply(message, [], [], PlaceholderLlm())
     assert draft.missing_context is True
-    assert "get back to you" in draft.text.lower()
+    assert "follow up" in draft.text.lower() or "review this" in draft.text.lower()
     assert "secret launch date" not in draft.text.lower()
     assert "DRAFT" not in draft.text
 
@@ -143,7 +143,7 @@ def test_redraft_uses_rules_without_copying_incoming() -> None:
         rules=rules,
     )
     assert draft.engine == "redraft"
-    assert "I " in draft.text or draft.text.startswith("Hello")
+    assert "I " in draft.text or "Dear" in draft.text or draft.text.startswith("Hello")
     assert "as discussed on call" not in draft.text.lower()
     assert "deadline" in " ".join(draft.suggestions).lower() or "deadline" in draft.text.lower()
     assert "asharma111998" in draft.text or "Me" in draft.text or "I need" in draft.text
@@ -190,3 +190,11 @@ def test_ai_llm_uses_notes_when_provided() -> None:
     assert draft.engine == "gemini"
     assert "reopen the fee payment link" in draft.text.lower()
     assert "as discussed on call" not in draft.text.lower()
+
+
+def test_professional_greeting_uses_addressee_name() -> None:
+    message = make_message(sender="Ada Lovelace <ada@example.com>")
+    text = placeholder_reply(message, [], "en", owner_name="asharma111998")
+    assert text.startswith("Dear Ada,")
+    assert "Thank you for your email" in text
+    assert "Best regards" in text

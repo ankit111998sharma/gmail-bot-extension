@@ -426,13 +426,13 @@ async function runDraft(redraft, extras) {
       : document.getElementById("gmail-bot-notes")?.value || ""
   ).trim();
   setBusy(true);
-  toast(redraft ? "Fixing grammar and redrafting…" : "Writing your reply…");
+  toast(existing || redraft ? "Updating the existing draft…" : "Writing your reply…");
   ensureComposeBox();
   const response = await sendRuntime({
     action: "draftOpen",
     payload: {
       ...email,
-      existingDraft: redraft ? existing : "",
+      existingDraft: existing,
       rulesUrl,
       notes,
     },

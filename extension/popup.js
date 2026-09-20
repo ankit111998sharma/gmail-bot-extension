@@ -78,7 +78,7 @@ function shouldRetry(result) {
 
 async function runDraft(redraft) {
   setBusy(true);
-  showMessage(redraft ? "Fixing grammar and redrafting…" : "Writing your reply…");
+    showMessage(redraft || document.getElementById("preview-text")?.textContent ? "Updating the existing draft…" : "Writing your reply…");
   showPreview("");
   showSuggestions([]);
   let result = await requestDraft(redraft);
