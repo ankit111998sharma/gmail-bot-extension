@@ -12,7 +12,7 @@ from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 
-from gmail_bot.config import Settings, normalize_email
+from gmail_bot.config import Settings, normalize_email, same_email
 from gmail_bot.language import detect_language
 from gmail_bot.models import ParsedMessage, StyleExample, short_snippet
 from gmail_bot.resilience import RateLimiter, retry_call
@@ -34,6 +34,9 @@ class GmailPort(Protocol):
     def delete_draft(self, draft_id: str) -> None: ...
     def apply_label(self, message_id: str, label_name: str) -> None: ...
     def fetch_sent_examples(self, limit: int = 20) -> list[StyleExample]: ...
+    def fetch_related_sent(
+        self, subject: str, limit: int = 8, correspondent: str = ""
+    ) -> list[StyleExample]: ...
 
 
 def header_map(headers: list[dict[str, str]] | None) -> dict[str, str]:
@@ -94,14 +97,32 @@ def reply_subject(subject: str | None) -> str:
     return value if value.lower().startswith("re:") else f"Re: {value}"
 
 
+def address_candidates(*values: str | None) -> list[str]:
+    seen: set[str] = set()
+    out: list[str] = []
+    for value in values:
+        for part in str(value or "").split(","):
+            candidate = part.strip()
+            email = normalize_email(candidate)
+            if not email or email in seen:
+                continue
+            seen.add(email)
+            out.append(candidate)
+    return out
+
+
 def reply_recipient(message: ParsedMessage, from_email: str = "") -> str:
-    """Address the original sender, never the inbox owner."""
+    """Address the other person, never the inbox owner."""
     mine = normalize_email(from_email)
-    for candidate in (message.reply_to, message.sender):
-        email = normalize_email(candidate)
-        if email and email != mine:
-            return candidate.strip()
-    return (message.sender or message.reply_to or "").strip()
+    for candidate in address_candidates(
+        message.reply_to,
+        message.sender,
+        getattr(message, "to_header", ""),
+        getattr(message, "cc_header", ""),
+    ):
+        if not same_email(candidate, mine):
+            return candidate
+    return ""
 
 
 def build_draft_payload(message: ParsedMessage, reply_text: str, from_email: str = "") -> dict[str, Any]:
@@ -139,6 +160,8 @@ def parse_gmail_message(raw: dict[str, Any]) -> ParsedMessage:
         message_id_header=headers.get("message-id", ""),
         references=headers.get("references", ""),
         reply_to=headers.get("reply-to", ""),
+        to_header=headers.get("to", ""),
+        cc_header=headers.get("cc", ""),
     )
 
 
@@ -263,15 +286,46 @@ class GmailAdapter:
         self._call(request)
 
     def fetch_sent_examples(self, limit: int = 20) -> list[StyleExample]:
-        request = self.service.users().messages().list(userId=USER, q="in:sent", maxResults=limit)
-        result = self._call(request)
+        return self._examples_from_ids(self.list_message_ids("in:sent", limit), limit)
+
+    def fetch_related_sent(self, subject: str, limit: int = 8, correspondent: str = "") -> list[StyleExample]:
+        from gmail_bot.draft_engine import topic_hint
+
+        words = [w for w in topic_hint(subject, limit=6).split() if len(w) > 2][:6]
+        other = normalize_email(correspondent)
+        or_clause = " OR ".join(words)
+        queries: list[str] = []
+        if other and or_clause:
+            queries.append(f"in:sent to:{other} ({or_clause})")
+        if or_clause:
+            queries.append(f"in:sent ({or_clause})")
+        if other:
+            queries.append(f"in:sent to:{other}")
+        queries.append("in:sent")
+        seen: list[str] = []
+        for query in queries:
+            try:
+                ids = self.list_message_ids(query, max(limit, 8))
+            except Exception:  # noqa: BLE001
+                logger.warning("Related sent search failed", extra={"event": "related_sent_query_failed"})
+                continue
+            for message_id in ids:
+                if message_id not in seen:
+                    seen.append(message_id)
+            if len(seen) >= limit:
+                break
+        return self._examples_from_ids(seen, limit)
+
+    def _examples_from_ids(self, ids: list[str], limit: int) -> list[StyleExample]:
         examples: list[StyleExample] = []
-        for item in result.get("messages") or []:
-            msg = self.get_message(item["id"])
+        for message_id in ids:
+            msg = self.get_message(message_id)
             body = short_snippet(msg.body, 800)
             if not body:
                 continue
             examples.append(StyleExample(subject=msg.subject, body=body, language=detect_language(body)))
+            if len(examples) >= limit:
+                break
         return examples
 
     def _ensure_label(self, name: str) -> str:

@@ -4,9 +4,9 @@ import logging
 import threading
 from datetime import datetime, timezone
 
-from gmail_bot.config import Settings, load_settings, normalize_email
+from gmail_bot.config import Settings, load_settings, normalize_email, same_email
 from gmail_bot.draft_engine import generate_reply
-from gmail_bot.gmail_adapter import GmailAdapter, GmailPort
+from gmail_bot.gmail_adapter import GmailAdapter, GmailPort, reply_recipient
 from gmail_bot.llm import LlmPort, build_llm
 from gmail_bot.logging_setup import setup_logging
 from gmail_bot.models import BotStatus, ParsedMessage, StyleExample, short_snippet
@@ -239,16 +239,27 @@ class InboxBot:
         self._assert_account()
         self._refresh_style_examples()
         found = self._find_open_message(sender, subject, body)
+        _, owner_email = self._owner_identity()
+        reply_sender = found.sender
+        if same_email(reply_sender, owner_email) or same_email(sender, owner_email):
+            reply_sender = reply_recipient(found, owner_email) or found.sender
+        elif sender:
+            reply_sender = sender
+        reply_body = found.body
+        if body and not same_email(sender, owner_email):
+            reply_body = body
         message = ParsedMessage(
             message_id=found.message_id,
             thread_id=found.thread_id,
-            sender=sender or found.sender,
-            subject=subject or found.subject,
-            body=body or found.body,
+            sender=reply_sender or found.sender,
+            subject=found.subject or subject,
+            body=reply_body,
             snippet=found.snippet,
             message_id_header=found.message_id_header,
             references=found.references,
             reply_to=found.reply_to,
+            to_header=found.to_header,
+            cc_header=found.cc_header,
         )
         text, draft_id = self._write_draft(message, replace_existing=True)
         self.last_activity = f"drafted open mail at {_utcnow()}"
@@ -262,33 +273,65 @@ class InboxBot:
         }
 
     def _find_open_message(self, sender: str, subject: str, body: str = "") -> ParsedMessage:
-        email = normalize_email(sender)
+        _, owner_email = self._owner_identity()
+        other = "" if same_email(sender, owner_email) else normalize_email(sender)
         want = strip_reply_prefix(subject).lower()
-        query = "in:inbox"
-        if email:
-            query += f" from:{email}"
-        if want:
-            query += f' subject:"{want.replace(chr(34), "")}"'
-        ids = []
+        want_q = want.replace('"', "")
+        queries: list[str] = []
+        if other and want_q:
+            queries.append(f'in:inbox from:{other} subject:"{want_q}"')
+        if other:
+            queries.append(f"in:inbox from:{other}")
+        if want_q:
+            queries.append(f'in:inbox -from:me subject:"{want_q}"')
+        queries.append("in:inbox -from:me")
+
         lister = getattr(self.gmail, "list_message_ids", None)
-        if callable(lister):
-            ids = lister(query, 10)
-            if not ids and email:
-                ids = lister(f"in:inbox from:{email}", 10)
-        else:
-            ids = self.gmail.list_unread_ids(query)
-        if not ids:
-            raise RuntimeError("Could not find this email in the connected Gmail. Open the message and try again.")
-        for message_id in ids:
+        seen: list[str] = []
+        for query in queries:
+            ids = lister(query, 10) if callable(lister) else self.gmail.list_unread_ids(query)
+            for message_id in ids:
+                if message_id not in seen:
+                    seen.append(message_id)
+        fallback: ParsedMessage | None = None
+        for message_id in seen:
             message = self.gmail.get_message(message_id)
+            if same_email(message.sender, owner_email):
+                continue
             have = strip_reply_prefix(message.subject).lower()
-            sender_blob = (message.sender or "").lower()
-            if email and email not in sender_blob:
+            subject_ok = (not want) or want in have or have in want
+            sender_ok = (not other) or other in (message.sender or "").lower()
+            if subject_ok and sender_ok:
+                return message
+            if fallback is None and (subject_ok or sender_ok):
+                fallback = message
+        if fallback is not None:
+            return fallback
+        raise RuntimeError("Could not find this email in the connected Gmail. Open the other person's message and try again.")
+
+    def _style_examples_for(self, message: ParsedMessage) -> list[StyleExample]:
+        related: list[StyleExample] = []
+        fetcher = getattr(self.gmail, "fetch_related_sent", None)
+        if callable(fetcher):
+            try:
+                related = list(
+                    fetcher(message.subject, 8, normalize_email(message.sender)) or []
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "Could not load related sent mail: %s",
+                    exc,
+                    extra={"event": "related_sent_failed"},
+                )
+        merged: list[StyleExample] = []
+        seen: set[tuple[str, str]] = set()
+        for example in related + list(self._style_cache):
+            key = (example.subject, example.body)
+            if key in seen or not (example.body or "").strip():
                 continue
-            if want and want not in have and have not in want:
-                continue
-            return message
-        return self.gmail.get_message(ids[0])
+            seen.add(key)
+            merged.append(example)
+        return merged
 
     def _refresh_style_examples(self) -> None:
         if self._style_loaded:
@@ -314,6 +357,9 @@ class InboxBot:
     def _write_draft(self, message: ParsedMessage, *, replace_existing: bool = False) -> tuple[str, str]:
         if not matches_filters(message, self.settings):
             raise RuntimeError("This email did not match the saved sender/keyword filters.")
+        _, owner_email = self._owner_identity()
+        if not reply_recipient(message, owner_email):
+            raise RuntimeError("Could not find who to reply to. Open the other person's message.")
         existing = self.store.get_queue_item(message.message_id)
         if replace_existing and existing and existing.get("draft_id"):
             deleter = getattr(self.gmail, "delete_draft", None)
@@ -340,7 +386,7 @@ class InboxBot:
         draft = generate_reply(
             message,
             chunks,
-            self._style_cache,
+            self._style_examples_for(message),
             self.llm,
             assistant_name=owner_name,
             owner_email=owner_email,
@@ -383,6 +429,9 @@ class InboxBot:
 
     def _process_message(self, message_id: str) -> bool:
         message = self.gmail.get_message(message_id)
+        _, owner_email = self._owner_identity()
+        if same_email(message.sender, owner_email):
+            return False
         if not matches_filters(message, self.settings):
             return False
         try:

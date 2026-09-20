@@ -74,6 +74,23 @@ def test_reply_is_from_inbox_owner_not_sender() -> None:
     assert "me@gmail.com" not in parsed["To"].lower()
 
 
+def test_reply_uses_to_header_when_open_mail_is_own_sent() -> None:
+    message = make_message(
+        sender="Me <me@gmail.com>",
+        to_header="Rachana Shrotri <esupport@kuk.ac.in>",
+        reply_to="",
+        subject="Request to Reopen Fee Payment Link",
+        body="Please reopen the fee payment link.",
+    )
+    assert "esupport@kuk.ac.in" in reply_recipient(message, "me@gmail.com").lower()
+    payload = build_draft_payload(message, "Please confirm the link is open.", from_email="me@gmail.com")
+    raw = base64.urlsafe_b64decode(payload["message"]["raw"].encode("ascii"))
+    parsed = message_from_bytes(raw, policy=email_policy.default)
+    assert parsed["From"] == "me@gmail.com"
+    assert "esupport@kuk.ac.in" in parsed["To"].lower()
+    assert "me@gmail.com" not in parsed["To"].lower()
+
+
 def test_reply_subject_keeps_existing_re() -> None:
     assert reply_subject("Re: Hello") == "Re: Hello"
     assert reply_subject("Hello").startswith("Re:")
@@ -88,6 +105,7 @@ def test_parse_gmail_message_uses_reply_to() -> None:
             "mimeType": "text/plain",
             "headers": [
                 {"name": "From", "value": "Ada <ada@example.com>"},
+                {"name": "To", "value": "Me <me@gmail.com>"},
                 {"name": "Reply-To", "value": "desk@example.com"},
                 {"name": "Subject", "value": "Help"},
                 {"name": "Message-ID", "value": "<mid@example.com>"},
@@ -97,6 +115,7 @@ def test_parse_gmail_message_uses_reply_to() -> None:
     }
     parsed = parse_gmail_message(raw)
     assert parsed.draft_to == "desk@example.com"
+    assert parsed.to_header == "Me <me@gmail.com>"
     assert parsed.body == "Need help"
 
 

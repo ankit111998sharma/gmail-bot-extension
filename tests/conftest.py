@@ -72,19 +72,30 @@ class FakeGmail:
         return self.list_message_ids(query, limit=500)
 
     def list_message_ids(self, query: str, limit: int = 10) -> list[str]:
+        import re
+
         q = (query or "").lower()
+        mine = (self.profile_email or "").lower()
+        skip_me = bool(re.search(r"(^|\s)-from:me(\s|$)", q))
+        sent_only = "in:sent" in q
+        from_match = re.search(r"(?<!-)from:([^\s\"']+)", q)
+        from_token = (from_match.group(1) if from_match else "").strip("\"'")
+        subject_token = ""
+        if "subject:" in q:
+            subject_token = q.split("subject:", 1)[1].strip().strip("\"'")
         ids: list[str] = []
         for message in self.messages.values():
-            blob = f"{message.sender} {message.subject} {message.body}".lower()
-            if "from:" in q:
-                addr = (message.sender or "").lower()
-                token = q.split("from:", 1)[1].split()[0].strip("\"'")
-                if token and token not in addr:
-                    continue
-            if "subject:" in q:
+            sender = (message.sender or "").lower()
+            is_mine = bool(mine and mine in sender)
+            if skip_me and is_mine:
+                continue
+            if sent_only and not is_mine:
+                continue
+            if from_token and from_token not in sender:
+                continue
+            if subject_token:
                 subject = (message.subject or "").lower()
-                token = q.split("subject:", 1)[1].strip().strip("\"'")
-                if token and token not in subject and subject not in token:
+                if subject_token not in subject and subject not in subject_token:
                     continue
             ids.append(message.message_id)
             if len(ids) >= limit:
@@ -120,6 +131,22 @@ class FakeGmail:
 
     def fetch_sent_examples(self, limit: int = 20) -> list[StyleExample]:
         return self.sent_examples[:limit]
+
+    def fetch_related_sent(self, subject: str = "", limit: int = 8, correspondent: str = "") -> list[StyleExample]:
+        from gmail_bot.draft_engine import topic_hint
+
+        words = [w.lower() for w in topic_hint(subject, limit=6).split() if len(w) > 2]
+        if not words:
+            return self.sent_examples[:limit]
+        scored: list[tuple[int, StyleExample]] = []
+        for example in self.sent_examples:
+            blob = f"{example.subject} {example.body}".lower()
+            score = sum(1 for word in words if word in blob)
+            if score:
+                scored.append((score, example))
+        scored.sort(key=lambda row: -row[0])
+        picked = [example for _, example in scored[:limit]]
+        return picked or self.sent_examples[:limit]
 
     def send(self, *args, **kwargs):  # safety: tests fail if bot ever calls this
         self.send_called = True

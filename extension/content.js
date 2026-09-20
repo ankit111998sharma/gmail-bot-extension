@@ -1,15 +1,37 @@
-function readOpenEmail() {
+function normalizeEmail(value) {
+  const match = String(value || "")
+    .toLowerCase()
+    .match(/[a-z0-9._%+\-]+@[a-z0-9.\-]+\.[a-z]{2,}/);
+  return match ? match[0] : "";
+}
+
+function senderFromEl(el) {
+  return (el?.getAttribute("email") || el?.innerText || "").trim();
+}
+
+function readOpenEmail(ownerEmail) {
   const subject =
     document.querySelector("h2.hP")?.innerText ||
     document.querySelector("h2[data-legacy-thread-id]")?.innerText ||
     "";
-  const senderEl = document.querySelector("span.gD");
-  const sender = senderEl?.getAttribute("email") || senderEl?.innerText || "";
+  const owner = normalizeEmail(ownerEmail);
+  const senders = [...document.querySelectorAll("span.gD")];
+  let senderEl = null;
+  for (let i = senders.length - 1; i >= 0; i -= 1) {
+    const email = normalizeEmail(senderFromEl(senders[i]));
+    if (email && (!owner || email !== owner)) {
+      senderEl = senders[i];
+      break;
+    }
+  }
+  if (!senderEl && senders.length) {
+    senderEl = senders[senders.length - 1];
+  }
   const bodies = document.querySelectorAll("div.a3s.aiL");
   const body = bodies.length ? bodies[bodies.length - 1].innerText : "";
   return {
     subject: subject.trim(),
-    sender: sender.trim(),
+    sender: senderFromEl(senderEl),
     body: body.trim(),
   };
 }
@@ -38,13 +60,16 @@ function findComposeBox() {
 }
 
 function clickReply() {
-  const reply =
-    document.querySelector('div[aria-label="Reply"]') ||
-    document.querySelector('span[data-tooltip="Reply"]') ||
-    document.querySelector('div[data-tooltip="Reply"]') ||
-    document.querySelector('[aria-label^="Reply"]');
-  if (reply) {
-    reply.click();
+  const replies = [
+    ...document.querySelectorAll('div[aria-label="Reply"]'),
+    ...document.querySelectorAll('span[data-tooltip="Reply"]'),
+    ...document.querySelectorAll('div[data-tooltip="Reply"]'),
+    ...document.querySelectorAll('[aria-label^="Reply"]'),
+  ];
+  const unique = [...new Set(replies)];
+  const btn = unique[unique.length - 1] || unique[0];
+  if (btn) {
+    btn.click();
   }
 }
 
@@ -93,11 +118,24 @@ function ensureButton() {
   document.body.appendChild(btn);
 }
 
+function fetchHealth() {
+  return new Promise((resolve) => {
+    chrome.runtime.sendMessage({ action: "health" }, (response) => {
+      if (chrome.runtime.lastError) {
+        resolve({});
+        return;
+      }
+      resolve(response || {});
+    });
+  });
+}
+
 async function onClick(event) {
   event.preventDefault();
   event.stopPropagation();
   const btn = event.currentTarget;
-  const email = readOpenEmail();
+  const health = await fetchHealth();
+  const email = readOpenEmail(health.connected_email || health.target_email || "");
   if (!email.subject && !email.sender) {
     toast("Open an email first, then click the bot button.");
     return;

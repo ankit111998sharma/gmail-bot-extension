@@ -20,6 +20,12 @@ def normalize_email(value: str | None) -> str:
     return (match.group(1) if match else "").lower()
 
 
+def same_email(left: str | None, right: str | None) -> bool:
+    a = normalize_email(left)
+    b = normalize_email(right)
+    return bool(a and b and a == b)
+
+
 def _as_int(value: str | None, default: int) -> int:
     if value is None or value.strip() == "":
         return default

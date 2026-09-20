@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from gmail_bot.bot import InboxBot, matches_filters
-from gmail_bot.config import Settings, normalize_email
+from gmail_bot.config import Settings, normalize_email, same_email
 from tests.conftest import FakeGmail, make_message
 
 
@@ -67,6 +67,23 @@ def test_normalize_email() -> None:
     assert normalize_email("Ada <ada@example.com>") == "ada@example.com"
     assert normalize_email("  YOU@Gmail.Com ") == "you@gmail.com"
     assert normalize_email("not-an-email") == ""
+    assert same_email("Me <me@gmail.com>", "me@gmail.com") is True
+    assert same_email("Ada <ada@example.com>", "me@gmail.com") is False
+
+
+def test_process_skips_mail_from_inbox_owner(settings: Settings, store) -> None:
+    mine = make_message(
+        sender="Me <me@gmail.com>",
+        to_header="Ada <ada@example.com>",
+        subject="Follow up",
+        body="Please confirm the hours.",
+    )
+    gmail = FakeGmail([mine], profile_email="me@gmail.com")
+    bot = InboxBot(settings=settings, store=store, gmail=gmail)
+    store.set_setting("connected_email", "me@gmail.com")
+    assert bot.process_once() == 0
+    assert gmail.drafts == []
+    assert gmail.send_called is False
 
 
 def test_set_target_email_is_saved(settings: Settings, store) -> None:
@@ -100,7 +117,7 @@ def test_process_once_rejects_other_signed_in_account(settings: Settings, store)
 
 
 def test_process_once_runs_for_matching_account(settings: Settings, store) -> None:
-    message = make_message()
+    message = make_message(sender="Bob <bob@example.com>")
     gmail = FakeGmail([message], profile_email="ada@example.com")
     bot = InboxBot(settings=settings, store=store, gmail=gmail)
     bot.set_target_email("ada@example.com")

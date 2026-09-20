@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from gmail_bot.draft_engine import generate_reply, placeholder_reply, topic_hint
 from gmail_bot.llm import PlaceholderLlm
-from gmail_bot.models import RetrievedChunk
+from gmail_bot.models import RetrievedChunk, StyleExample
 from gmail_bot.rag import KnowledgeBase, chunk_text, tokenize
 from tests.conftest import make_message
 
@@ -82,3 +82,24 @@ def test_placeholder_does_not_quote_sender_or_guidelines() -> None:
     assert "Never invent" not in text
     assert "Fee Payment" in text
     assert topic_hint(message.subject) == "Reopen Fee Payment Link"
+
+
+def test_placeholder_uses_related_sent_mail_not_incoming_wording() -> None:
+    message = make_message(
+        sender="Rachana Shrotri <esupport@kuk.ac.in>",
+        subject="Re: Request to Reopen Fee Payment Link",
+        body="As discussed on call, I hope the issue has been resolved.",
+    )
+    examples = [
+        StyleExample(
+            subject="Request to Reopen Fee Payment Link",
+            body="Please reopen the fee payment link for the internship backlog.",
+        )
+    ]
+    text = placeholder_reply(
+        message, [], "en", owner_name="asharma111998", examples=examples
+    )
+    assert "As discussed on call" not in text
+    assert "issue has been resolved" not in text
+    assert "fee payment" in text.lower()
+    assert "asharma111998" in text.split("Best regards")[-1]

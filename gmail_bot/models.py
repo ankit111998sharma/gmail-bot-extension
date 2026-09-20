@@ -21,6 +21,8 @@ class ParsedMessage:
     message_id_header: str = ""
     references: str = ""
     reply_to: str = ""
+    to_header: str = ""
+    cc_header: str = ""
 
     @property
     def draft_to(self) -> str:
