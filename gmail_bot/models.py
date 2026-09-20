@@ -54,6 +54,7 @@ class DraftResult:
     language: str
     used_chunks: list[RetrievedChunk] = field(default_factory=list)
     missing_context: bool = False
+    suggestions: list[str] = field(default_factory=list)
 
 
 @dataclass

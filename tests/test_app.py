@@ -16,6 +16,7 @@ def test_simple_home_layout_renders() -> None:
     assert "Stop" in labels
     assert "Use this email" in labels
     assert "Connect this Gmail" in labels
+    assert "Use this URL" in labels
 
 
 def test_start_pause_stop_do_not_crash_ui() -> None:

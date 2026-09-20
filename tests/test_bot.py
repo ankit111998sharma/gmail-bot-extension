@@ -71,6 +71,13 @@ def test_normalize_email() -> None:
     assert same_email("Ada <ada@example.com>", "me@gmail.com") is False
 
 
+def test_set_rules_url_is_saved(settings: Settings, store) -> None:
+    gmail = FakeGmail([])
+    bot = InboxBot(settings=settings, store=store, gmail=gmail)
+    assert bot.set_rules_url("https://kuk.ac.in/rules") == "https://kuk.ac.in/rules"
+    assert store.get_setting("rules_url") == "https://kuk.ac.in/rules"
+
+
 def test_process_skips_mail_from_inbox_owner(settings: Settings, store) -> None:
     mine = make_message(
         sender="Me <me@gmail.com>",

@@ -1,6 +1,12 @@
 from __future__ import annotations
 
-from gmail_bot.draft_engine import generate_reply, placeholder_reply, topic_hint
+from gmail_bot.draft_engine import (
+    correct_grammar,
+    generate_reply,
+    placeholder_reply,
+    strip_quoted_reply,
+    topic_hint,
+)
 from gmail_bot.llm import PlaceholderLlm
 from gmail_bot.models import RetrievedChunk, StyleExample
 from gmail_bot.rag import KnowledgeBase, chunk_text, tokenize
@@ -103,3 +109,41 @@ def test_placeholder_uses_related_sent_mail_not_incoming_wording() -> None:
     assert "issue has been resolved" not in text
     assert "fee payment" in text.lower()
     assert "asharma111998" in text.split("Best regards")[-1]
+
+
+def test_correct_grammar_and_strip_quoted_thread() -> None:
+    quoted = (
+        "hello i hope the issue is resolve  please confirm the fee link\n\n"
+        "On Mon, 20 Sep 2026 Rachana wrote:\n"
+        "> As discussed on call, I hope the issue has been resolved.\n"
+    )
+    cleaned = strip_quoted_reply(quoted)
+    assert "As discussed" not in cleaned
+    text = correct_grammar(cleaned)
+    assert "I hope" in text
+    assert "resolved" in text
+    assert "Please confirm" in text
+
+
+def test_redraft_uses_rules_without_copying_incoming() -> None:
+    message = make_message(
+        sender="Rachana Shrotri <esupport@kuk.ac.in>",
+        subject="Re: Request to Reopen Fee Payment Link",
+        body="As discussed on call, I hope the issue has been resolved.",
+    )
+    rules = ["Students must pay the semester fee before the notified deadline."]
+    draft = generate_reply(
+        message,
+        [],
+        [],
+        PlaceholderLlm(),
+        assistant_name="asharma111998",
+        owner_email="me@gmail.com",
+        existing_draft="hello i need the fee link please reopen it",
+        rules=rules,
+    )
+    assert draft.engine == "redraft"
+    assert "I " in draft.text or draft.text.startswith("Hello")
+    assert "as discussed on call" not in draft.text.lower()
+    assert "deadline" in " ".join(draft.suggestions).lower() or "deadline" in draft.text.lower()
+    assert "asharma111998" in draft.text or "Me" in draft.text or "I need" in draft.text

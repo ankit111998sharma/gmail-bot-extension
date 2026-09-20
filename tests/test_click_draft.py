@@ -52,6 +52,7 @@ def test_local_api_draft_open_endpoint(settings: Settings, store) -> None:
         assert response.status == 200
         assert data["ok"] is True
         assert "draftText" in data
+        assert "suggestions" in data
         assert "DRAFT" not in data["draftText"]
         assert "knowledge base" not in data["draftText"].lower()
         assert len(gmail.drafts) == 1
@@ -102,6 +103,36 @@ def test_click_drafts_as_owner_using_related_sent_mail(settings: Settings, store
     assert "issue has been resolved" not in text
     assert "fee payment" in text
     assert "me" in result["draftText"].split("Best regards")[-1].lower()
+
+
+def test_click_redrafts_existing_draft_with_rules_url(settings: Settings, store, monkeypatch) -> None:
+    monkeypatch.setattr(
+        "gmail_bot.bot.fetch_page_rules",
+        lambda url, topic="": ["Students must pay the semester fee before the notified deadline."],
+    )
+    message = make_message(
+        subject="Re: Request to Reopen Fee Payment Link",
+        body="As discussed on call, I hope the issue has been resolved.",
+        sender="Rachana <esupport@kuk.ac.in>",
+    )
+    gmail = FakeGmail([message])
+    bot = InboxBot(settings=settings, store=store, gmail=gmail)
+    result = bot.draft_from_open_mail(
+        "Rachana <esupport@kuk.ac.in>",
+        "Re: Request to Reopen Fee Payment Link",
+        "As discussed on call, I hope the issue has been resolved.",
+        existing_draft="hello i hope the issue is resolve  please confirm",
+        rules_url="https://kuk.ac.in/fee-rules",
+    )
+    text = result["draftText"]
+    assert "I hope" in text
+    assert "resolved" in text.lower()
+    assert "as discussed on call" not in text.lower()
+    assert result["suggestions"]
+    assert "deadline" in " ".join(result["suggestions"]).lower() or "deadline" in text.lower()
+    assert gmail.drafts[0]["from"] == "me@gmail.com"
+    assert gmail.send_called is False
+    assert bot.store.get_setting("rules_url") == "https://kuk.ac.in/fee-rules"
 
 
 def test_click_replaces_previous_bot_draft(settings: Settings, store) -> None:

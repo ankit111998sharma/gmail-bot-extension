@@ -23,11 +23,82 @@
   cursor: wait;
 }
 
-#gmail-bot-toast {
+#gmail-bot-panel {
   position: fixed;
   right: 28px;
   bottom: 96px;
   z-index: 999999;
+  width: 280px;
+  background: #ffffff;
+  color: #111827;
+  border: 1px solid #e5e7eb;
+  border-radius: 12px;
+  box-shadow: 0 10px 30px rgba(17, 24, 39, 0.12);
+  padding: 10px;
+  font: 13px/1.4 Arial, sans-serif;
+}
+
+#gmail-bot-panel label {
+  display: block;
+  color: #6b7280;
+  margin-bottom: 6px;
+}
+
+#gmail-bot-url {
+  width: 100%;
+  box-sizing: border-box;
+  border: 1px solid #d1d5db;
+  border-radius: 8px;
+  padding: 8px;
+  margin-bottom: 8px;
+  font: 13px/1.4 Arial, sans-serif;
+}
+
+#gmail-bot-actions {
+  display: flex;
+  gap: 6px;
+}
+
+#gmail-bot-actions button {
+  flex: 1;
+  border: none;
+  border-radius: 8px;
+  min-height: 32px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+#gmail-bot-draft {
+  background: #2563eb;
+  color: #fff;
+}
+
+#gmail-bot-redraft {
+  background: #f3f4f6;
+  color: #111827;
+}
+
+#gmail-bot-suggestions {
+  margin-top: 8px;
+  color: #374151;
+  max-height: 140px;
+  overflow: auto;
+}
+
+#gmail-bot-suggestions p {
+  margin: 0 0 6px;
+  font-weight: 600;
+}
+
+#gmail-bot-suggestions li {
+  margin: 0 0 4px 16px;
+}
+
+#gmail-bot-toast {
+  position: fixed;
+  right: 28px;
+  bottom: 340px;
+  z-index: 1000000;
   max-width: 280px;
   background: #111827;
   color: #fff;

@@ -102,6 +102,25 @@ def render_account(bot) -> None:
         st.caption(f"Saved {status.target_email} — not signed in yet")
     else:
         st.caption("The bot will only draft mail for the Gmail you enter here.")
+    if "rules_url_input" not in st.session_state:
+        st.session_state.rules_url_input = bot.store.get_setting("rules_url")
+    st.markdown("##### Rules URL")
+    st.text_input(
+        "Rules or regulations URL",
+        key="rules_url_input",
+        placeholder="https://example.com/fee-rules",
+        label_visibility="collapsed",
+    )
+    if st.button("Use this URL", width="stretch"):
+        try:
+            url = bot.set_rules_url(st.session_state.rules_url_input)
+            if url:
+                st.success("Saved. The next reply will use rules from this page.")
+            else:
+                st.success("Cleared the rules URL.")
+        except Exception as exc:  # noqa: BLE001
+            st.error(str(exc))
+    st.caption("Optional. Paste a rules or regulations page; suggestions appear on Drafts and in Gmail.")
 
 
 def render_home(bot) -> None:
@@ -131,7 +150,7 @@ def render_home(bot) -> None:
     m1.metric("Drafts made", status.processed_count)
     m2.metric("Waiting", status.queue_pending)
     m3.metric("Failed", status.queue_failed)
-    st.caption("On Gmail, click the blue bot icon to draft the open email. Keep this window running.")
+    st.caption("On Gmail, click the blue bot icon to draft. Use Redraft to fix grammar. Keep this window running.")
 
     st.markdown("##### Recent activity")
     logs = bot.store.recent_job_logs(8)
@@ -143,7 +162,7 @@ def render_home(bot) -> None:
 
 def render_drafts(bot) -> None:
     rows = bot.store.list_queue()
-    st.caption("Review drafts here, then send them yourself from Gmail.")
+    st.caption("Review drafts here, then send them yourself from Gmail. Redraft fixes grammar and uses the rules URL.")
     if not rows:
         st.markdown('<p class="muted">No drafts yet. Start the bot after Gmail is connected.</p>', unsafe_allow_html=True)
     else:
@@ -153,15 +172,31 @@ def render_drafts(bot) -> None:
                 st.caption(row.get("sender") or "")
                 if row.get("last_error"):
                     st.error(row["last_error"])
-                preview = st.text_area(
-                    "Draft",
-                    value=row.get("draft_preview") or "",
-                    key=f"preview-{row['message_id']}",
-                    height=180,
-                )
+                preview_key = f"preview-{row['message_id']}"
+                suggest_key = f"suggest-{row['message_id']}"
+                if preview_key not in st.session_state:
+                    st.session_state[preview_key] = row.get("draft_preview") or ""
+                preview = st.text_area("Draft", key=preview_key, height=180)
+                if st.button("Redraft & fix grammar", key=f"redraft-{row['message_id']}"):
+                    try:
+                        result = bot.redraft_existing(
+                            row["message_id"],
+                            preview,
+                            st.session_state.get("rules_url_input") or bot.store.get_setting("rules_url"),
+                        )
+                        st.session_state[preview_key] = result.get("draftText") or result.get("text") or preview
+                        st.session_state[suggest_key] = result.get("suggestions") or []
+                        st.rerun()
+                    except Exception as exc:  # noqa: BLE001
+                        st.error(str(exc))
+                suggestions = st.session_state.get(suggest_key) or []
+                if suggestions:
+                    st.markdown("**Suggestions from the rules page**")
+                    for item in suggestions:
+                        st.write(f"- {item}")
                 name = st.text_input("Save as template", key=f"tpl-{row['message_id']}")
                 if st.button("Save template", key=f"save-{row['message_id']}") and name.strip():
-                    bot.store.upsert_template(name.strip(), preview)
+                    bot.store.upsert_template(name.strip(), st.session_state.get(preview_key) or preview)
                     st.success(f"Saved “{name.strip()}”.")
 
     st.markdown("##### Templates")
@@ -241,7 +276,7 @@ def render_setup(bot) -> None:
 
 1. Keep this app running (`run.bat`).
 2. Chrome → `chrome://extensions` → Developer mode → Load unpacked → select the `extension` folder in this project.
-3. Open Gmail, open an email, click the blue bot icon. A draft is created only when you click it.
+3. Open Gmail, open an email, paste an optional rules URL in the bot card, then click **Draft reply**. Use **Redraft & fix grammar** to correct an existing draft.
         """
     )
 

@@ -3,15 +3,17 @@ from __future__ import annotations
 import logging
 import threading
 from datetime import datetime, timezone
+from typing import Any
 
 from gmail_bot.config import Settings, load_settings, normalize_email, same_email
-from gmail_bot.draft_engine import generate_reply
+from gmail_bot.draft_engine import generate_reply, topic_hint
 from gmail_bot.gmail_adapter import GmailAdapter, GmailPort, reply_recipient
 from gmail_bot.llm import LlmPort, build_llm
 from gmail_bot.logging_setup import setup_logging
-from gmail_bot.models import BotStatus, ParsedMessage, StyleExample, short_snippet
+from gmail_bot.models import BotStatus, ParsedMessage, RetrievedChunk, StyleExample, short_snippet
 from gmail_bot.rag import KnowledgeBase
 from gmail_bot.resilience import backoff_seconds
+from gmail_bot.rules import fetch_page_rules, normalize_rules_url
 from gmail_bot.store import Store
 
 logger = logging.getLogger("gmail_bot")
@@ -150,6 +152,29 @@ class InboxBot:
         if profile:
             self.store.set_setting("connected_email", profile)
 
+    def set_rules_url(self, url: str) -> str:
+        cleaned = (url or "").strip()
+        if cleaned:
+            cleaned = normalize_rules_url(cleaned)
+        self.store.set_setting("rules_url", cleaned)
+        return cleaned
+
+    def _load_rules(self, rules_url: str, topic: str) -> tuple[list[str], list[str]]:
+        raw = (rules_url or self.store.get_setting("rules_url")).strip()
+        if not raw:
+            return [], []
+        try:
+            url = normalize_rules_url(raw)
+        except ValueError as exc:
+            return [], [str(exc)]
+        if (rules_url or "").strip():
+            self.store.set_setting("rules_url", url)
+        try:
+            return fetch_page_rules(url, topic), []
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Could not read rules URL: %s", exc, extra={"event": "rules_url_failed"})
+            return [], [f"Could not read the rules URL: {exc}"]
+
     def _owner_identity(self) -> tuple[str, str]:
         email = normalize_email(self.store.get_setting("connected_email") or self.settings.gmail_account)
         if not email:
@@ -232,8 +257,15 @@ class InboxBot:
         self.last_activity = f"processed {drafted} draft(s) at {self.last_poll}"
         return drafted
 
-    def draft_from_open_mail(self, sender: str, subject: str, body: str = "") -> dict[str, str]:
-        """Create a short reply for the open Gmail message. Click-only."""
+    def draft_from_open_mail(
+        self,
+        sender: str,
+        subject: str,
+        body: str = "",
+        existing_draft: str = "",
+        rules_url: str = "",
+    ) -> dict[str, Any]:
+        """Create or redraft a short reply for the open Gmail message. Click-only."""
         if not self.gmail.oauth_ready() and not getattr(self.gmail, "_service", None):
             raise RuntimeError("Gmail is not connected. Keep this app running and click Connect this Gmail.")
         self._assert_account()
@@ -261,16 +293,50 @@ class InboxBot:
             to_header=found.to_header,
             cc_header=found.cc_header,
         )
-        text, draft_id = self._write_draft(message, replace_existing=True)
+        rules, fetch_notes = self._load_rules(rules_url, f"{message.subject}\n{topic_hint(message.subject)}")
+        payload = self._write_draft(
+            message,
+            replace_existing=True,
+            existing_draft=existing_draft,
+            rules=rules,
+        )
+        suggestions = list(payload.get("suggestions") or []) + fetch_notes
         self.last_activity = f"drafted open mail at {_utcnow()}"
         return {
-            "draft_id": draft_id,
+            "draft_id": payload["draft_id"],
             "message_id": message.message_id,
             "subject": message.subject,
             "sender": message.sender,
-            "text": text,
-            "draftText": text,
+            "text": payload["text"],
+            "draftText": payload["text"],
+            "suggestions": suggestions,
+            "rulesUrl": self.store.get_setting("rules_url"),
         }
+
+    def redraft_existing(self, message_id: str, draft_text: str = "", rules_url: str = "") -> dict[str, Any]:
+        item = self.store.get_queue_item(message_id)
+        if not item:
+            raise RuntimeError("That draft was not found. Open the email in Gmail and draft it first.")
+        sender = item.get("sender") or ""
+        subject = item.get("subject") or ""
+        body = item.get("snippet") or ""
+        getter = getattr(self.gmail, "get_message", None)
+        if callable(getter):
+            try:
+                found = getter(message_id)
+                sender = found.sender or sender
+                subject = found.subject or subject
+                body = found.body or body
+            except Exception:  # noqa: BLE001
+                logger.warning("Could not reload message for redraft", extra={"event": "redraft_lookup_failed"})
+        existing = draft_text or item.get("draft_preview") or ""
+        return self.draft_from_open_mail(
+            sender,
+            subject,
+            body,
+            existing_draft=existing,
+            rules_url=rules_url,
+        )
 
     def _find_open_message(self, sender: str, subject: str, body: str = "") -> ParsedMessage:
         _, owner_email = self._owner_identity()
@@ -354,7 +420,14 @@ class InboxBot:
         self._style_loaded = True
         self.store.replace_style_examples([(ex.subject, ex.body, ex.language) for ex in examples])
 
-    def _write_draft(self, message: ParsedMessage, *, replace_existing: bool = False) -> tuple[str, str]:
+    def _write_draft(
+        self,
+        message: ParsedMessage,
+        *,
+        replace_existing: bool = False,
+        existing_draft: str = "",
+        rules: list[str] | None = None,
+    ) -> dict[str, Any]:
         if not matches_filters(message, self.settings):
             raise RuntimeError("This email did not match the saved sender/keyword filters.")
         _, owner_email = self._owner_identity()
@@ -380,8 +453,10 @@ class InboxBot:
                 "attempts": attempts,
             }
         )
-        query = f"{message.subject}\n{message.body}"
-        chunks = self.knowledge.retrieve(query, k=self.settings.retrieve_k)
+        query = f"{message.subject}\n{message.body}\n{existing_draft}"
+        chunks = [
+            RetrievedChunk(source="url-rules", text=rule, score=1.0) for rule in (rules or []) if rule.strip()
+        ] + self.knowledge.retrieve(query, k=self.settings.retrieve_k)
         owner_name, owner_email = self._owner_identity()
         draft = generate_reply(
             message,
@@ -390,6 +465,8 @@ class InboxBot:
             self.llm,
             assistant_name=owner_name,
             owner_email=owner_email,
+            existing_draft=existing_draft,
+            rules=rules or [],
         )
         draft_id = self.gmail.create_draft_reply(message, draft.text, from_email=owner_email)
         self.gmail.apply_label(message.message_id, self.settings.label_name)
@@ -425,7 +502,7 @@ class InboxBot:
                 "snippet": message.log_snippet,
             },
         )
-        return draft.text, draft_id
+        return {"text": draft.text, "draft_id": draft_id, "suggestions": draft.suggestions}
 
     def _process_message(self, message_id: str) -> bool:
         message = self.gmail.get_message(message_id)
