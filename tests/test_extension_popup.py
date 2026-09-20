@@ -48,4 +48,7 @@ def test_extension_popup_shows_optional_url_and_notes() -> None:
     assert "stripQuotedText" in content
     assert "composeBodyText" in content
     assert "removeQuotedBlocks" in content
-    assert "1.5.4" in manifest
+    assert "isNewComposeWindow" in content
+    assert "rememberDraftId" in content
+    assert "cllg" in content.lower()
+    assert "1.5.5" in manifest

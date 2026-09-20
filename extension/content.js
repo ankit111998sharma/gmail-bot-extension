@@ -340,13 +340,49 @@ function normalizeGmailDraftId(value) {
     raw = raw.slice(colon + 1);
   }
   raw = raw.replace(/^#/, "").trim();
-  if (!raw || raw.toLowerCase() === "new") {
+  if (!raw || /^(new|null|undefined)$/i.test(raw) || /^cllg/i.test(raw)) {
+    return "";
+  }
+  if (/^r-?\d{6,}$/i.test(raw)) {
+    return raw;
+  }
+  if (raw.length > 40) {
     return "";
   }
   return raw;
 }
 
+function isNewComposeWindow() {
+  const href = location.href || "";
+  const match = href.match(/[?&#]compose=([^&#]+)/i);
+  if (match) {
+    let raw = match[1];
+    try {
+      raw = decodeURIComponent(raw);
+    } catch (_error) {
+      /* Keep the compose token if it is not encoded. */
+    }
+    if (/^cllg/i.test(raw) || /^new$/i.test(raw)) {
+      return true;
+    }
+  }
+  return Boolean(findComposeBox() && !hasOpenThread());
+}
+
+function rememberDraftId(box, draftId) {
+  const id = normalizeGmailDraftId(draftId);
+  if (!box || !id) {
+    return;
+  }
+  box.setAttribute("data-gmail-bot-draft-id", id);
+}
+
 function readComposeDraftId() {
+  const box = findComposeBox();
+  const remembered = normalizeGmailDraftId(box?.getAttribute("data-gmail-bot-draft-id") || "");
+  if (remembered) {
+    return remembered;
+  }
   const href = location.href || "";
   const match = href.match(/[?&#]compose=([^&#]+)/i);
   if (match) {
@@ -362,8 +398,8 @@ function readComposeDraftId() {
       return id;
     }
   }
-  const tagged = document.querySelector("[data-draft-id]");
-  return normalizeGmailDraftId(tagged?.getAttribute("data-draft-id") || "");
+  const tagged = box?.getAttribute("data-draft-id") || document.querySelector("[data-draft-id]")?.getAttribute("data-draft-id");
+  return normalizeGmailDraftId(tagged || "");
 }
 
 function openGmailDraft(draftId) {
@@ -571,6 +607,9 @@ function showSuggestions(items) {
 }
 
 function preferredMode() {
+  if (isNewComposeWindow() && !hasOpenThread()) {
+    return "compose";
+  }
   if (isDraftsView() && !hasOpenThread()) {
     return "compose";
   }
@@ -756,6 +795,13 @@ function togglePanel() {
     return;
   }
   panel.classList.toggle("is-open");
+  if (panel.classList.contains("is-open") && isNewComposeWindow() && !hasOpenThread()) {
+    const composeRadio = document.getElementById("gmail-bot-mode-compose");
+    if (composeRadio) {
+      composeRadio.checked = true;
+      syncPanelMode();
+    }
+  }
 }
 
 function ensureButton() {
@@ -835,7 +881,15 @@ function applyOptionalFields(extras) {
 async function runDraft(redraft, extras) {
   applyOptionalFields(extras);
   const health = await fetchHealth();
-  const composeMode = shouldUseComposeMode(extras);
+  let composeMode = shouldUseComposeMode(extras);
+  if (!composeMode && !(extras && extras.mode) && isNewComposeWindow() && !hasOpenThread()) {
+    composeMode = true;
+    const composeRadio = document.getElementById("gmail-bot-mode-compose");
+    if (composeRadio) {
+      composeRadio.checked = true;
+      syncPanelMode();
+    }
+  }
   const rulesUrl = (
     extras && extras.rulesUrl != null
       ? extras.rulesUrl
@@ -914,6 +968,7 @@ async function runDraft(redraft, extras) {
   showSuggestions(response.suggestions);
   await sleep(400);
   let box = await ensureComposeBox(composeMode);
+  rememberDraftId(box, savedId);
   fillComposeHeader(payload.to || "", response.subject || payload.subject || "");
   let placed = false;
   if (box && hasDraftText(box, text)) {
@@ -922,14 +977,22 @@ async function runDraft(redraft, extras) {
     placed = await fillComposeReliable(box, text);
   }
   if (!placed && savedId && normalizeGmailDraftId(savedId) !== normalizeGmailDraftId(gmailDraftId)) {
-    openGmailDraft(savedId);
-    await sleep(900);
-    box = await ensureComposeBox(composeMode);
-    fillComposeHeader(payload.to || "", response.subject || payload.subject || "");
-    if (box) {
-      placed = await fillComposeReliable(box, text);
+    if (isNewComposeWindow()) {
+      box = findComposeBox() || box;
+      if (box) {
+        placed = await fillComposeReliable(box, text);
+      }
+    } else {
+      openGmailDraft(savedId);
+      await sleep(900);
+      box = await ensureComposeBox(composeMode);
+      fillComposeHeader(payload.to || "", response.subject || payload.subject || "");
+      if (box) {
+        placed = await fillComposeReliable(box, text);
+      }
     }
   }
+  rememberDraftId(findComposeBox() || box, savedId);
   placed = (await keepDraftVisible(text)) || placed;
   toast(
     placed

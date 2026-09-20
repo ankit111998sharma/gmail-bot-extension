@@ -26,8 +26,14 @@ USER = "me"
 logger = logging.getLogger("gmail_bot")
 
 
+_API_DRAFT_ID = re.compile(r"^r-?\d{6,}$", re.I)
+
+
 def normalize_gmail_draft_id(value: str) -> str:
-    """Turn Gmail's web compose id (#msg-a:r-123) into the API draft id (r-123)."""
+    """Turn Gmail's web compose id into a Gmail API draft id.
+
+    `#msg-a:r-123` → `r-123`. Web-only ids such as `new` or `Cllg…` are ignored.
+    """
     raw = unquote(str(value or "")).strip()
     if not raw:
         return ""
@@ -36,6 +42,12 @@ def normalize_gmail_draft_id(value: str) -> str:
         raw = raw.rsplit(":", 1)[-1]
     raw = raw.lstrip("#").strip()
     if raw.lower() in {"new", "null", "undefined"}:
+        return ""
+    if raw.lower().startswith("cllg"):
+        return ""
+    if _API_DRAFT_ID.match(raw):
+        return raw
+    if len(raw) > 40:
         return ""
     return raw
 

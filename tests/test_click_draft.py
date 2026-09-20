@@ -463,6 +463,27 @@ def test_compose_redrafts_typed_draft_without_notes(settings: Settings, store) -
     assert gmail.send_called is False
 
 
+def test_compose_cllg_web_id_updates_the_same_draft(settings: Settings, store) -> None:
+    gmail = FakeGmail([])
+    bot = InboxBot(settings=settings, store=store, gmail=gmail)
+    cllg = "CllgCHrjnPljXhkHsstfGGsFQxpKXJNHvpWGgFJNncrqmglKNWQPrjHrbbdvQXBfcLSkWJRwQzg"
+    first = bot.draft_compose_mail(
+        "Ada <ada@example.com>",
+        "Hours",
+        notes="please confirm hours",
+        gmail_draft_id=cllg,
+    )
+    result = bot.draft_compose_mail(
+        "Ada <ada@example.com>",
+        "Hours",
+        existing_draft="please confirm the office hours",
+        gmail_draft_id=cllg,
+    )
+    assert len(gmail.drafts) == 1
+    assert result["draft_id"] == first["draft_id"]
+    assert gmail.send_called is False
+
+
 def test_compose_requires_a_recipient(settings: Settings, store) -> None:
     gmail = FakeGmail([])
     bot = InboxBot(settings=settings, store=store, gmail=gmail)

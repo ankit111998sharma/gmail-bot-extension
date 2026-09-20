@@ -92,6 +92,12 @@ def test_normalize_gmail_web_compose_draft_id() -> None:
     assert normalize_gmail_draft_id("%23msg-a%3Ar-1254484180139252497") == "r-1254484180139252497"
     assert normalize_gmail_draft_id("new") == ""
     assert normalize_gmail_draft_id("r-7773436777887474175") == "r-7773436777887474175"
+    assert (
+        normalize_gmail_draft_id(
+            "CllgCHrjnPljXhkHsstfGGsFQxpKXJNHvpWGgFJNncrqmglKNWQPrjHrbbdvQXBfcLSkWJRwQzg"
+        )
+        == ""
+    )
 
 
 def test_draft_payload_requires_from_and_names_inbox_owner() -> None:
