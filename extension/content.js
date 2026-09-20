@@ -80,13 +80,7 @@ function shouldUseComposeMode(extras) {
   if (extras && extras.mode) {
     return String(extras.mode).toLowerCase() === "compose";
   }
-  if (composeModeSelected()) {
-    return true;
-  }
-  if (isDraftsView()) {
-    return true;
-  }
-  return Boolean(findComposeBox() && !hasOpenThread());
+  return composeModeSelected();
 }
 
 function readOpenEmail(ownerEmail) {
@@ -576,40 +570,103 @@ function showSuggestions(items) {
   box.append(heading, ul);
 }
 
+function preferredMode() {
+  if (isDraftsView() && !hasOpenThread()) {
+    return "compose";
+  }
+  if (hasOpenThread()) {
+    return "reply";
+  }
+  return findComposeBox() && !hasOpenThread() ? "compose" : "reply";
+}
+
 function syncPanelMode() {
-  const compose = composeModeSelected() || isDraftsView();
+  const compose = composeModeSelected();
   const toWrap = document.getElementById("gmail-bot-to-wrap");
   const draftBtn = document.getElementById("gmail-bot-draft");
-  const composeRadio = document.getElementById("gmail-bot-mode-compose");
-  const replyRadio = document.getElementById("gmail-bot-mode-reply");
-  if (isDraftsView() && composeRadio && !replyRadio?.checked) {
-    composeRadio.checked = true;
-  }
+  const redraftBtn = document.getElementById("gmail-bot-redraft");
   if (toWrap) {
-    toWrap.hidden = !(composeModeSelected() || isDraftsView());
+    toWrap.hidden = !compose;
   }
   if (draftBtn) {
-    draftBtn.textContent = composeModeSelected() || isDraftsView() ? "Write / update draft" : "Draft reply";
+    draftBtn.textContent = compose ? "Write a new mail" : "Draft reply";
+  }
+  if (redraftBtn) {
+    redraftBtn.textContent = "Redraft & grammar";
+    redraftBtn.hidden = false;
   }
   const toEl = document.getElementById("gmail-bot-to");
   if (toEl && !toEl.value) {
     toEl.value = readComposeTo();
   }
+  const subjectEl = document.getElementById("gmail-bot-subject");
+  if (subjectEl && !subjectEl.value) {
+    subjectEl.value = readComposeSubject();
+  }
+}
+
+function setRadioCaption(input, caption) {
+  if (!input) {
+    return;
+  }
+  const label = input.closest("label") || input.parentElement;
+  if (!label) {
+    return;
+  }
+  [...label.childNodes].forEach((node) => {
+    if (node !== input) {
+      node.remove();
+    }
+  });
+  label.appendChild(document.createTextNode(` ${caption}`));
+}
+
+function setModeLabels(root) {
+  setRadioCaption(root.querySelector("#gmail-bot-mode-compose"), "Write a new mail");
+  setRadioCaption(root.querySelector("#gmail-bot-mode-reply"), "Reply to an open mail");
+}
+
+function ensureSubjectFields(toWrap) {
+  if (!toWrap || document.getElementById("gmail-bot-subject")) {
+    return;
+  }
+  const subjectLabel = document.createElement("label");
+  subjectLabel.setAttribute("for", "gmail-bot-subject");
+  subjectLabel.textContent = "Subject";
+  const subjectInput = document.createElement("input");
+  subjectInput.id = "gmail-bot-subject";
+  subjectInput.type = "text";
+  subjectInput.placeholder = "Optional subject";
+  toWrap.append(subjectLabel, subjectInput);
 }
 
 function upgradePanel() {
   const panel = document.getElementById("gmail-bot-panel");
-  if (!panel || document.getElementById("gmail-bot-mode")) {
-    syncPanelMode();
+  if (!panel) {
     return;
   }
   const hint = panel.querySelector(".hint");
-  const mode = document.createElement("div");
+  if (hint) {
+    hint.textContent =
+      "Pick Write a new mail or Reply to an open mail. Redraft & grammar works for both. URL and notes are optional.";
+  }
+  if (document.getElementById("gmail-bot-mode")) {
+    setModeLabels(panel);
+    ensureSubjectFields(document.getElementById("gmail-bot-to-wrap"));
+    syncPanelMode();
+    return;
+  }
+  const mode = document.createElement("fieldset");
   mode.id = "gmail-bot-mode";
   mode.className = "mode";
-  mode.innerHTML =
-    '<label><input type="radio" name="gmail-bot-mode" id="gmail-bot-mode-reply" value="reply" checked /> Reply to open email</label>' +
-    '<label><input type="radio" name="gmail-bot-mode" id="gmail-bot-mode-compose" value="compose" /> Write or update a Gmail draft</label>';
+  const legend = document.createElement("legend");
+  legend.textContent = "What should the bot do?";
+  mode.appendChild(legend);
+  mode.insertAdjacentHTML(
+    "beforeend",
+    '<label><input type="radio" name="gmail-bot-mode" id="gmail-bot-mode-compose" value="compose" /> Write a new mail</label>' +
+      '<label><input type="radio" name="gmail-bot-mode" id="gmail-bot-mode-reply" value="reply" /> Reply to an open mail</label>'
+  );
   const toWrap = document.createElement("div");
   toWrap.id = "gmail-bot-to-wrap";
   toWrap.hidden = true;
@@ -621,11 +678,20 @@ function upgradePanel() {
   toInput.type = "text";
   toInput.placeholder = "name@example.com";
   toWrap.append(toLabel, toInput);
+  ensureSubjectFields(toWrap);
   if (hint && hint.nextSibling) {
     panel.insertBefore(mode, hint.nextSibling);
     panel.insertBefore(toWrap, mode.nextSibling);
   } else {
     panel.prepend(mode, toWrap);
+  }
+  const start = preferredMode();
+  const composeRadio = document.getElementById("gmail-bot-mode-compose");
+  const replyRadio = document.getElementById("gmail-bot-mode-reply");
+  if (start === "compose" && composeRadio) {
+    composeRadio.checked = true;
+  } else if (replyRadio) {
+    replyRadio.checked = true;
   }
   mode.querySelectorAll("input").forEach((el) => {
     el.addEventListener("change", syncPanelMode);
@@ -639,7 +705,8 @@ function ensurePanel() {
     panel.id = "gmail-bot-panel";
     const hint = document.createElement("p");
     hint.className = "hint";
-    hint.textContent = "Choose reply or a Gmail draft. URL and notes are optional. Leave blank to skip.";
+    hint.textContent =
+      "Pick Write a new mail or Reply to an open mail. Redraft & grammar works for both. URL and notes are optional.";
     const urlLabel = document.createElement("label");
     urlLabel.setAttribute("for", "gmail-bot-url");
     urlLabel.textContent = "Website URL";
@@ -742,6 +809,7 @@ function applyOptionalFields(extras) {
   const urlEl = document.getElementById("gmail-bot-url");
   const notesEl = document.getElementById("gmail-bot-notes");
   const toEl = document.getElementById("gmail-bot-to");
+  const subjectEl = document.getElementById("gmail-bot-subject");
   const composeRadio = document.getElementById("gmail-bot-mode-compose");
   const replyRadio = document.getElementById("gmail-bot-mode-reply");
   if (urlEl && extras.rulesUrl != null) {
@@ -752,6 +820,9 @@ function applyOptionalFields(extras) {
   }
   if (toEl && extras.to != null) {
     toEl.value = extras.to;
+  }
+  if (subjectEl && extras.subject != null) {
+    subjectEl.value = extras.subject;
   }
   if (String(extras.mode || "").toLowerCase() === "compose" && composeRadio) {
     composeRadio.checked = true;
@@ -776,7 +847,15 @@ async function runDraft(redraft, extras) {
       : document.getElementById("gmail-bot-notes")?.value || ""
   ).trim();
   setBusy(true);
-  toast(composeMode ? "Writing your Gmail draft…" : "Updating the existing draft…");
+  toast(
+    redraft
+      ? composeMode
+        ? "Redrafting the new mail…"
+        : "Redrafting the reply…"
+      : composeMode
+        ? "Writing a new mail…"
+        : "Drafting a reply…"
+  );
   await ensureComposeBox(composeMode);
   await sleep(400);
   const existing = readComposeText();
@@ -793,11 +872,15 @@ async function runDraft(redraft, extras) {
     payload.to = (
       extras && extras.to != null ? extras.to : document.getElementById("gmail-bot-to")?.value || readComposeTo()
     ).trim();
-    payload.subject = readComposeSubject();
+    payload.subject = (
+      extras && extras.subject != null
+        ? extras.subject
+        : document.getElementById("gmail-bot-subject")?.value || readComposeSubject()
+    ).trim();
     payload.sender = payload.to;
     if (!payload.to && !gmailDraftId) {
       setBusy(false);
-      const error = "Enter who this Gmail draft is To, or open a draft that already has a recipient.";
+      const error = "Enter who this new mail is To, or open a draft that already has a recipient.";
       toast(error);
       return { ok: false, error };
     }
@@ -805,7 +888,7 @@ async function runDraft(redraft, extras) {
     const email = readOpenEmail(health.connected_email || health.target_email || "");
     if (!email.subject && !email.sender) {
       setBusy(false);
-      const error = "Open an email first, or switch to Write or update a Gmail draft.";
+      const error = "Open a mail first, or switch to Write a new mail.";
       toast(error);
       return { ok: false, error };
     }
@@ -851,8 +934,8 @@ async function runDraft(redraft, extras) {
   toast(
     placed
       ? composeMode
-        ? "Draft is in your Gmail compose box. No need to refresh."
-        : "Draft is in the reply box. No need to refresh."
+        ? "New mail draft is in your Gmail compose box. No need to refresh."
+        : "Reply draft is in the reply box. No need to refresh."
       : "Draft is ready in the bot card. Open the Gmail draft if the box is hidden."
   );
   return { ok: true, placed, draftText: text, suggestions: response.suggestions };
@@ -871,6 +954,7 @@ chrome.runtime.onMessage.addListener((request, _sender, sendResponse) => {
     notes: request.notes || "",
     mode: request.mode || "",
     to: request.to || "",
+    subject: request.subject || "",
   })
     .then(sendResponse)
     .catch((error) => sendResponse({ ok: false, error: error.message || String(error) }));

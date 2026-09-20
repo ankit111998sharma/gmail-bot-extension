@@ -37,6 +37,16 @@ h1 {
   display: grid;
   gap: 6px;
   margin: 0 0 10px;
+  border: 0;
+  padding: 0;
+}
+
+.mode legend {
+  padding: 0;
+  margin: 0 0 6px;
+  color: #111827;
+  font-size: 12px;
+  font-weight: 600;
 }
 
 .mode label {
@@ -46,6 +56,14 @@ h1 {
   color: #111827;
   font-size: 12px;
   margin: 0;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  padding: 8px;
+}
+
+.mode label:has(input:checked) {
+  border-color: #2563eb;
+  background: #eff6ff;
 }
 
 .mode input {

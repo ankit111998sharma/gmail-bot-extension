@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "Gmail Draft Bot",
-  "version": "1.5.3",
-  "description": "Draft replies or write and update individual Gmail drafts. Never sends mail.",
+  "version": "1.5.4",
+  "description": "Write a new Gmail draft or reply to an open mail. Redraft and grammar for both. Never sends mail.",
   "icons": {
     "16": "icons/icon16.png",
     "48": "icons/icon48.png",

@@ -71,7 +71,7 @@ function syncMode() {
   }
   const btn = document.getElementById("draft-btn");
   if (btn) {
-    btn.textContent = compose ? "Write / update draft" : "Draft reply";
+    btn.textContent = compose ? "Write a new mail" : "Draft reply";
   }
 }
 
@@ -83,6 +83,7 @@ async function requestDraft(redraft) {
     notes: (document.getElementById("draft-notes").value || "").trim(),
     mode: selectedMode(),
     to: (document.getElementById("draft-to")?.value || "").trim(),
+    subject: (document.getElementById("draft-subject")?.value || "").trim(),
   });
 }
 
@@ -96,7 +97,16 @@ function shouldRetry(result) {
 
 async function runDraft(redraft) {
   setBusy(true);
-    showMessage(redraft || document.getElementById("preview-text")?.textContent ? "Updating the existing draft…" : "Writing your reply…");
+  const compose = selectedMode() === "compose";
+  showMessage(
+    redraft
+      ? compose
+        ? "Redrafting the new mail…"
+        : "Redrafting the reply…"
+      : compose
+        ? "Writing a new mail…"
+        : "Drafting a reply…"
+  );
   showPreview("");
   showSuggestions([]);
   let result = await requestDraft(redraft);
@@ -115,8 +125,8 @@ async function runDraft(redraft) {
   showMessage(
     result.placed
       ? selectedMode() === "compose"
-        ? "Draft is in your Gmail compose box."
-        : "Draft is in the Gmail reply box."
+        ? "New mail draft is in your Gmail compose box."
+        : "Reply draft is in the Gmail reply box."
       : "Draft is ready. Check Gmail Drafts if the compose box is closed."
   );
 }

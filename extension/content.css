@@ -53,6 +53,16 @@
   display: grid;
   gap: 6px;
   margin: 0 0 8px;
+  border: 0;
+  padding: 0;
+}
+
+#gmail-bot-mode legend {
+  padding: 0;
+  margin: 0 0 6px;
+  color: #111827;
+  font-size: 12px;
+  font-weight: 600;
 }
 
 #gmail-bot-mode label {
@@ -62,6 +72,14 @@
   color: #111827;
   font-size: 12px;
   margin: 0;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  padding: 8px;
+}
+
+#gmail-bot-mode label:has(input:checked) {
+  border-color: #2563eb;
+  background: #eff6ff;
 }
 
 #gmail-bot-to-wrap {
@@ -76,7 +94,8 @@
 
 #gmail-bot-url,
 #gmail-bot-notes,
-#gmail-bot-to {
+#gmail-bot-to,
+#gmail-bot-subject {
   width: 100%;
   box-sizing: border-box;
   border: 1px solid #d1d5db;

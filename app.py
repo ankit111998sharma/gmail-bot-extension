@@ -163,22 +163,26 @@ def render_home(bot) -> None:
 
 def render_drafts(bot) -> None:
     rows = bot.store.list_queue()
-    st.caption("Review drafts here, then send them yourself from Gmail. Redraft fixes grammar and uses the rules URL.")
-    st.markdown("##### Write or update a Gmail draft")
-    st.caption("Creates an individual email in Gmail Drafts (not a reply). Open that draft in Gmail to edit it further.")
+    st.caption("Pick Write a new mail or Reply. Redraft & grammar is available for both.")
+    st.markdown("##### Write a new mail")
+    st.caption("Creates a new individual email in Gmail Drafts (not a reply). It is not sent.")
     to_val = st.text_input("To", key="compose-to", placeholder="name@example.com")
     subject_val = st.text_input("Subject", key="compose-subject", placeholder="Optional")
     notes_val = st.text_area(
         "What should this email say?",
         key="compose-notes",
         height=120,
-        placeholder="Optional. Leave blank to polish an existing Gmail draft body after you open it in Gmail.",
+        placeholder="Optional. Describe the new mail, or paste a draft to redraft.",
     )
-    if st.button("Write Gmail draft", type="primary"):
+    write_col, redraft_col = st.columns(2)
+    write_new = write_col.button("Write a new mail", type="primary")
+    redraft_new = redraft_col.button("Redraft & grammar")
+    if write_new or redraft_new:
         try:
             result = bot.draft_compose_mail(
                 to_val,
                 subject_val,
+                existing_draft=notes_val if redraft_new else "",
                 notes=notes_val,
                 rules_url=st.session_state.get("rules_url_input") or bot.store.get_setting("rules_url"),
             )
@@ -186,7 +190,8 @@ def render_drafts(bot) -> None:
             st.text_area("Draft preview", value=result.get("draftText") or "", height=160, disabled=True)
         except Exception as exc:  # noqa: BLE001
             st.error(str(exc))
-    st.markdown("##### Reply drafts")
+    st.markdown("##### Reply to an open mail")
+    st.caption("These are reply drafts from Gmail threads. Redraft & grammar rewrites the selected reply.")
     if not rows:
         st.markdown('<p class="muted">No drafts yet. Start the bot after Gmail is connected.</p>', unsafe_allow_html=True)
     else:
@@ -201,7 +206,7 @@ def render_drafts(bot) -> None:
                 if preview_key not in st.session_state:
                     st.session_state[preview_key] = row.get("draft_preview") or ""
                 preview = st.text_area("Draft", key=preview_key, height=180)
-                if st.button("Redraft & fix grammar", key=f"redraft-{row['message_id']}"):
+                if st.button("Redraft & grammar", key=f"redraft-{row['message_id']}"):
                     try:
                         result = bot.redraft_existing(
                             row["message_id"],
@@ -348,7 +353,7 @@ def render_setup(bot) -> None:
 
 1. Keep this app running (`run.bat`).
 2. Chrome → `chrome://extensions` → Developer mode → Load unpacked → select the `extension` folder in this project.
-3. Pin **Gmail Draft Bot**, open Gmail, then click the extension icon. Choose **Reply to open email** or **Write or update a Gmail draft**. Optional website URL and description appear there. Leave both blank to skip them.
+3. Pin **Gmail Draft Bot**, open Gmail, then click the extension icon or the Gmail page ✉️ button. Choose **Write a new mail** or **Reply to an open mail**. **Redraft & grammar** works for both. Optional website URL and description can stay blank.
         """
     )
 
