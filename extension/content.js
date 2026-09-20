@@ -11,8 +11,26 @@ function normalizeEmail(value) {
   return match ? match[0] : "";
 }
 
+function lastEmail(value) {
+  const matches = String(value || "")
+    .toLowerCase()
+    .match(/[a-z0-9._%+\-]+@[a-z0-9.\-]+\.[a-z]{2,}/g);
+  return matches && matches.length ? matches[matches.length - 1] : "";
+}
+
 function senderFromEl(el) {
   return (el?.getAttribute("email") || el?.innerText || "").trim();
+}
+
+function readPageAccount() {
+  const fromTitle = lastEmail(document.title);
+  if (fromTitle) {
+    return fromTitle;
+  }
+  const labeled = document.querySelector(
+    'a[aria-label*="Google Account"], a[aria-label*="@gmail.com"], img[aria-label*="@"]'
+  );
+  return lastEmail(labeled?.getAttribute("aria-label") || "");
 }
 
 function readOpenEmail(ownerEmail) {
@@ -66,7 +84,12 @@ function isVisible(el) {
 }
 
 function isComposeEditor(el) {
-  if (!el || el.getAttribute("contenteditable") !== "true") {
+  if (!el) {
+    return false;
+  }
+  const editable = (el.getAttribute("contenteditable") || "").toLowerCase();
+  const gmailEditable = el.getAttribute("g_editable") === "true";
+  if (editable !== "true" && editable !== "plaintext-only" && !gmailEditable) {
     return false;
   }
   if (!isVisible(el)) {
@@ -80,11 +103,13 @@ function isComposeEditor(el) {
     return false;
   }
   return Boolean(
-    el.classList.contains("editable") ||
+    gmailEditable ||
+      el.classList.contains("editable") ||
       el.classList.contains("LW-avf") ||
+      el.classList.contains("Am") ||
       label.includes("message body") ||
       label.includes("compose") ||
-      el.closest(".M9, .aoI, .ip, .gA, [aria-label='Reply']")
+      el.closest(".M9, .aoI, .ip, .gA, .aO7, [aria-label='Reply'], [role='dialog']")
   );
 }
 
@@ -93,13 +118,14 @@ function findComposeInDocument(doc) {
     return null;
   }
   const nodes = [
+    ...doc.querySelectorAll('[g_editable="true"]'),
     ...doc.querySelectorAll('div.Am.Al.editable[contenteditable="true"]'),
     ...doc.querySelectorAll('div.LW-avf[contenteditable="true"]'),
     ...doc.querySelectorAll('div[aria-label="Message Body"][contenteditable="true"]'),
     ...doc.querySelectorAll('div[aria-label="Compose body"][contenteditable="true"]'),
     ...doc.querySelectorAll('div[role="textbox"][contenteditable="true"]'),
   ];
-  const matches = nodes.filter(isComposeEditor);
+  const matches = [...new Set(nodes)].filter(isComposeEditor);
   return matches[matches.length - 1] || null;
 }
 
@@ -129,6 +155,7 @@ function readComposeText() {
 
 function clickReply() {
   const replies = [
+    ...document.querySelectorAll('div[role="button"][aria-label="Reply"]'),
     ...document.querySelectorAll('div[aria-label="Reply"]'),
     ...document.querySelectorAll('span[role="link"][data-tooltip="Reply"]'),
     ...document.querySelectorAll('span[data-tooltip="Reply"]'),
@@ -136,11 +163,59 @@ function clickReply() {
     ...document.querySelectorAll('[aria-label^="Reply"]'),
     ...document.querySelectorAll('div.ams.bkH'),
     ...document.querySelectorAll("span.ams.bkH"),
+    ...document.querySelectorAll('span.ams'),
   ];
-  const unique = [...new Set(replies)];
+  const unique = [...new Set(replies)].filter(isVisible);
   const btn = unique[unique.length - 1] || unique[0];
   if (btn) {
     btn.click();
+  }
+}
+
+function readThreadId() {
+  const tagged = document.querySelector("[data-legacy-thread-id], [data-thread-perm-id], h2.hP");
+  const fromDom =
+    tagged?.getAttribute("data-legacy-thread-id") ||
+    tagged?.getAttribute("data-thread-perm-id") ||
+    "";
+  if (fromDom) {
+    return fromDom;
+  }
+  const hash = (location.hash || "").replace(/^#/, "").split("?")[0];
+  const parts = hash.split("/").filter(Boolean);
+  const last = parts[parts.length - 1] || "";
+  return /^[a-f0-9]{10,}$/i.test(last) ? last : "";
+}
+
+function readComposeDraftId() {
+  const href = location.href || "";
+  const match = href.match(/[?&#]compose=([^&#]+)/i);
+  if (match) {
+    const first = decodeURIComponent(match[1] || "")
+      .split(",")[0]
+      .trim();
+    if (first && first !== "new") {
+      return first;
+    }
+  }
+  const hidden = document.querySelector('input[name="draft"], input[name="draft_id"]');
+  if (hidden && hidden.value && hidden.value !== "new") {
+    return String(hidden.value);
+  }
+  const tagged = document.querySelector("[data-draft-id]");
+  return tagged?.getAttribute("data-draft-id") || "";
+}
+
+function openGmailDraft(draftId) {
+  const id = String(draftId || "").trim();
+  if (!id || id === "new") {
+    return;
+  }
+  const hash = location.hash || "#inbox";
+  const base = hash.split("?")[0];
+  const next = `${base}?compose=${encodeURIComponent(id)}`;
+  if (location.hash !== next) {
+    location.hash = next;
   }
 }
 
@@ -154,11 +229,14 @@ async function ensureComposeBox() {
     return box;
   }
   clickReply();
-  for (let i = 0; i < 20; i += 1) {
+  for (let i = 0; i < 30; i += 1) {
     await sleep(200);
     box = findComposeBox();
     if (box) {
       return box;
+    }
+    if (i === 8 || i === 16) {
+      clickReply();
     }
   }
   return null;
@@ -197,6 +275,13 @@ function selectEditor(box) {
   selection.addRange(range);
 }
 
+function gmailBodyHtml(text) {
+  return String(text || "")
+    .split("\n")
+    .map((line) => (line ? `<div>${escapeHtml(line)}</div>` : "<div><br></div>"))
+    .join("");
+}
+
 function insertReply(box, text) {
   const doc = box.ownerDocument || document;
   selectEditor(box);
@@ -204,12 +289,14 @@ function insertReply(box, text) {
   const inserted = doc.execCommand("insertText", false, text);
   if (!inserted || !hasDraftText(box, text)) {
     selectEditor(box);
-    doc.execCommand("insertHTML", false, escapeHtml(text).replace(/\n/g, "<br>"));
+    doc.execCommand("selectAll", false, null);
+    doc.execCommand("insertHTML", false, gmailBodyHtml(text) || "<div><br></div>");
   }
   if (!hasDraftText(box, text)) {
     try {
       const data = new DataTransfer();
       data.setData("text/plain", text);
+      data.setData("text/html", gmailBodyHtml(text));
       box.dispatchEvent(
         new ClipboardEvent("paste", { clipboardData: data, bubbles: true, cancelable: true })
       );
@@ -218,18 +305,21 @@ function insertReply(box, text) {
     }
   }
   if (!hasDraftText(box, text)) {
+    box.innerHTML = gmailBodyHtml(text) || "<div><br></div>";
+  }
+  if (!hasDraftText(box, text)) {
     box.textContent = "";
     String(text || "")
       .split("\n")
       .forEach((line, index) => {
         if (index) {
-          box.appendChild(document.createElement("br"));
+          box.appendChild(doc.createElement("br"));
         }
-        box.appendChild(document.createTextNode(line));
+        box.appendChild(doc.createTextNode(line));
       });
   }
   box.dispatchEvent(
-    new InputEvent("input", { bubbles: true, cancelable: true, inputType: "insertText", data: text })
+    new InputEvent("input", { bubbles: true, cancelable: true, inputType: "insertFromPaste", data: text })
   );
   box.dispatchEvent(new Event("change", { bubbles: true }));
   box.dispatchEvent(new KeyboardEvent("keyup", { bubbles: true, key: "End" }));
@@ -238,15 +328,34 @@ function insertReply(box, text) {
 
 async function fillComposeReliable(box, text) {
   insertReply(box, text);
-  for (let i = 0; i < 8; i += 1) {
+  for (let i = 0; i < 10; i += 1) {
     if (hasDraftText(box, text)) {
       return true;
     }
     await sleep(250);
     const live = findComposeBox() || box;
     insertReply(live, text);
+    box = live;
   }
   return hasDraftText(findComposeBox() || box, text);
+}
+
+async function keepDraftVisible(text) {
+  let placed = false;
+  const deadline = Date.now() + 2800;
+  while (Date.now() < deadline) {
+    const box = findComposeBox();
+    if (box) {
+      if (hasDraftText(box, text)) {
+        placed = true;
+      } else {
+        insertReply(box, text);
+        placed = hasDraftText(box, text) || placed;
+      }
+    }
+    await sleep(350);
+  }
+  return placed;
 }
 
 function showDraftPreview(text) {
@@ -414,7 +523,6 @@ async function runDraft(redraft, extras) {
     toast(error);
     return { ok: false, error };
   }
-  const existing = readComposeText();
   const rulesUrl = (
     extras && extras.rulesUrl != null
       ? extras.rulesUrl
@@ -426,8 +534,12 @@ async function runDraft(redraft, extras) {
       : document.getElementById("gmail-bot-notes")?.value || ""
   ).trim();
   setBusy(true);
-  toast(existing || redraft ? "Updating the existing draft…" : "Writing your reply…");
-  ensureComposeBox();
+  toast("Updating the existing draft…");
+  await ensureComposeBox();
+  await sleep(400);
+  const existing = readComposeText();
+  const threadId = readThreadId();
+  const gmailDraftId = readComposeDraftId();
   const response = await sendRuntime({
     action: "draftOpen",
     payload: {
@@ -435,6 +547,9 @@ async function runDraft(redraft, extras) {
       existingDraft: existing,
       rulesUrl,
       notes,
+      threadId,
+      gmailDraftId,
+      pageEmail: readPageAccount(),
     },
   });
   setBusy(false);
@@ -444,19 +559,30 @@ async function runDraft(redraft, extras) {
     return { ok: false, error };
   }
   const text = response.draftText || response.text;
+  const savedId = response.draft_id || response.draftId || "";
   showDraftPreview(text);
   showSuggestions(response.suggestions);
-  const box = await ensureComposeBox();
-  if (!box) {
-    const message = "Draft is ready in the bot card. Click Reply if you also want it in Gmail's box.";
-    toast(message);
-    return { ok: true, placed: false, draftText: text, suggestions: response.suggestions };
+  await sleep(400);
+  let box = await ensureComposeBox();
+  let placed = false;
+  if (box && hasDraftText(box, text)) {
+    placed = true;
+  } else if (box) {
+    placed = await fillComposeReliable(box, text);
   }
-  const placed = await fillComposeReliable(box, text);
+  if (!placed && savedId && savedId !== gmailDraftId) {
+    openGmailDraft(savedId);
+    await sleep(900);
+    box = await ensureComposeBox();
+    if (box) {
+      placed = await fillComposeReliable(box, text);
+    }
+  }
+  placed = (await keepDraftVisible(text)) || placed;
   toast(
     placed
       ? "Draft is in the reply box. No need to refresh."
-      : "Draft is ready in the bot card. Click the reply box and try Redraft if Gmail hid it."
+      : "Draft is ready in the bot card. Click Reply if Gmail hid the box."
   );
   return { ok: true, placed, draftText: text, suggestions: response.suggestions };
 }

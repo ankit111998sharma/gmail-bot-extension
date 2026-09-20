@@ -221,14 +221,19 @@ class InboxBot:
             return [], [f"Could not read the rules URL: {exc}"]
 
     def _owner_identity(self) -> tuple[str, str]:
-        email = normalize_email(self.store.get_setting("connected_email") or self.settings.gmail_account)
-        if not email:
-            getter = getattr(self.gmail, "get_profile_email", None)
-            if callable(getter):
-                try:
-                    email = normalize_email(getter())
-                except Exception:  # noqa: BLE001
-                    email = ""
+        email = ""
+        getter = getattr(self.gmail, "get_profile_email", None)
+        if callable(getter):
+            try:
+                email = normalize_email(getter())
+            except Exception:  # noqa: BLE001
+                email = ""
+        if email:
+            stored = normalize_email(self.store.get_setting("connected_email"))
+            if stored != email:
+                self.store.set_setting("connected_email", email)
+        else:
+            email = normalize_email(self.store.get_setting("connected_email") or self.settings.gmail_account)
         name = (self.settings.assistant_name or "").strip()
         if not name or name.lower() in {"gmail bot", "gmailbot", "automated assistant"}:
             name = email.split("@")[0] if email else "Me"
@@ -310,18 +315,27 @@ class InboxBot:
         existing_draft: str = "",
         rules_url: str = "",
         notes: str = "",
+        thread_id: str = "",
+        gmail_draft_id: str = "",
+        page_email: str = "",
     ) -> dict[str, Any]:
         """Create or redraft a short reply for the open Gmail message. Click-only."""
         if not self.gmail.oauth_ready() and not getattr(self.gmail, "_service", None):
             raise RuntimeError("Gmail is not connected. Keep this app running and click Connect this Gmail.")
         self._assert_account()
         self._refresh_style_examples()
-        found = self._find_open_message(sender, subject, body)
+        found = self._find_open_message(sender, subject, body, thread_id=thread_id)
         if not (existing_draft or "").strip():
             queued = self.store.get_queue_item(found.message_id)
             if queued:
                 existing_draft = queued.get("draft_preview") or existing_draft
         _, owner_email = self._owner_identity()
+        page = normalize_email(page_email)
+        if page and owner_email and page != owner_email:
+            raise RuntimeError(
+                f"This Gmail tab is {page}, but the OAuth token is for {owner_email}. "
+                "Open that inbox or click Connect this Gmail so drafts are created on your behalf."
+            )
         reply_sender = found.sender
         if same_email(reply_sender, owner_email) or same_email(sender, owner_email):
             reply_sender = reply_recipient(found, owner_email) or found.sender
@@ -350,6 +364,7 @@ class InboxBot:
             existing_draft=existing_draft,
             rules=rules,
             notes=notes,
+            gmail_draft_id=gmail_draft_id,
         )
         suggestions = list(payload.get("suggestions") or []) + fetch_notes
         self.last_activity = f"drafted open mail at {_utcnow()}"
@@ -402,8 +417,30 @@ class InboxBot:
         except Exception:  # noqa: BLE001
             return self.llm
 
-    def _find_open_message(self, sender: str, subject: str, body: str = "") -> ParsedMessage:
+    def _find_open_message(
+        self, sender: str, subject: str, body: str = "", thread_id: str = ""
+    ) -> ParsedMessage:
         _, owner_email = self._owner_identity()
+        lister = getattr(self.gmail, "list_message_ids", None)
+        tid = (thread_id or "").strip()
+        if tid and callable(lister):
+            try:
+                thread_ids = lister(f"thread:{tid}", 30)
+            except Exception:  # noqa: BLE001
+                thread_ids = []
+            chosen: ParsedMessage | None = None
+            for message_id in thread_ids:
+                try:
+                    message = self.gmail.get_message(message_id)
+                except Exception:  # noqa: BLE001
+                    continue
+                if same_email(message.sender, owner_email):
+                    if chosen is None:
+                        chosen = message
+                    continue
+                chosen = message
+            if chosen is not None:
+                return chosen
         other = "" if same_email(sender, owner_email) else normalize_email(sender)
         want = strip_reply_prefix(subject).lower()
         want_q = want.replace('"', "")
@@ -415,8 +452,6 @@ class InboxBot:
         if want_q:
             queries.append(f'in:inbox -from:me subject:"{want_q}"')
         queries.append("in:inbox -from:me")
-
-        lister = getattr(self.gmail, "list_message_ids", None)
         seen: list[str] = []
         for query in queries:
             ids = lister(query, 10) if callable(lister) else self.gmail.list_unread_ids(query)
@@ -492,6 +527,7 @@ class InboxBot:
         existing_draft: str = "",
         rules: list[str] | None = None,
         notes: str = "",
+        gmail_draft_id: str = "",
     ) -> dict[str, Any]:
         if not matches_filters(message, self.settings):
             raise RuntimeError("This email did not match the saved sender/keyword filters.")
@@ -499,10 +535,12 @@ class InboxBot:
         if not reply_recipient(message, owner_email):
             raise RuntimeError("Could not find who to reply to. Open the other person's message.")
         existing = self.store.get_queue_item(message.message_id)
-        gmail_draft_id, gmail_draft_text = self._lookup_thread_draft(message.thread_id)
+        live_id, gmail_draft_text = self._lookup_thread_draft(message.thread_id)
         if not (existing_draft or "").strip():
             existing_draft = gmail_draft_text or ((existing or {}).get("draft_preview") or "")
-        draft_id_to_update = str((existing or {}).get("draft_id") or gmail_draft_id or "")
+        open_id = (gmail_draft_id or "").strip()
+        stored_id = str((existing or {}).get("draft_id") or "")
+        draft_id_to_update = open_id or live_id or stored_id
         attempts = int(existing["attempts"]) + 1 if existing else 1
         self.store.upsert_queue(
             {
@@ -531,7 +569,7 @@ class InboxBot:
             rules=rules or [],
             notes=notes,
         )
-        draft_id = self._save_draft_reply(message, draft.text, owner_email, draft_id_to_update)
+        draft_id = self._save_draft_reply(message, draft.text, owner_email, draft_id_to_update, owner_name)
         try:
             self.gmail.apply_label(message.message_id, self.settings.label_name)
         except Exception as exc:  # noqa: BLE001
@@ -585,20 +623,45 @@ class InboxBot:
         text = str(found[1] or "") if len(found) > 1 else ""
         return draft_id, text
 
-    def _save_draft_reply(self, message: ParsedMessage, text: str, owner_email: str, draft_id: str) -> str:
+    def _save_draft_reply(
+        self,
+        message: ParsedMessage,
+        text: str,
+        owner_email: str,
+        draft_id: str,
+        owner_name: str = "",
+    ) -> str:
         updater = getattr(self.gmail, "update_draft_reply", None)
-        if draft_id and callable(updater):
+        tried: set[str] = set()
+
+        def try_update(candidate: str) -> str:
+            want = (candidate or "").strip()
+            if not want or want in tried or not callable(updater):
+                return ""
+            tried.add(want)
             try:
-                return updater(draft_id, message, text, from_email=owner_email)
+                return updater(
+                    want, message, text, from_email=owner_email, from_name=owner_name
+                )
+            except TypeError:
+                return updater(want, message, text, from_email=owner_email)
             except Exception as exc:  # noqa: BLE001
                 logger.warning("Could not update existing draft: %s", exc, extra={"event": "draft_update_failed"})
-                deleter = getattr(self.gmail, "delete_draft", None)
-                if callable(deleter):
-                    try:
-                        deleter(draft_id)
-                    except Exception:  # noqa: BLE001
-                        logger.warning("Could not remove previous draft", extra={"event": "draft_replace_failed"})
-        return self.gmail.create_draft_reply(message, text, from_email=owner_email)
+                return ""
+
+        updated = try_update(draft_id)
+        if updated:
+            return updated
+        live_id, _ = self._lookup_thread_draft(message.thread_id)
+        updated = try_update(live_id)
+        if updated:
+            return updated
+        try:
+            return self.gmail.create_draft_reply(
+                message, text, from_email=owner_email, from_name=owner_name
+            )
+        except TypeError:
+            return self.gmail.create_draft_reply(message, text, from_email=owner_email)
 
     def _process_message(self, message_id: str) -> bool:
         message = self.gmail.get_message(message_id)

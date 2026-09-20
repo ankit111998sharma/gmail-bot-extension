@@ -61,6 +61,28 @@ def test_draft_payload_threads_and_headers() -> None:
     assert "<prev@mail.example.com>" in parsed["References"]
     assert "<id-1@mail.example.com>" in parsed["References"]
     assert "9 to 6" in parsed.get_content()
+    assert b"\r\n" in raw
+    assert b"From:" in raw
+    assert b"Content-Type:" in raw
+
+
+def test_draft_payload_requires_from_and_names_inbox_owner() -> None:
+    message = make_message()
+    try:
+        build_draft_payload(message, "Thanks.", from_email="")
+        raise AssertionError("expected missing From to fail")
+    except ValueError as exc:
+        assert "from" in str(exc).lower()
+    payload = build_draft_payload(
+        message, "Thanks.", from_email="me@gmail.com", from_name="Ankit Sharma"
+    )
+    raw = base64.urlsafe_b64decode(payload["message"]["raw"].encode("ascii"))
+    parsed = message_from_bytes(raw, policy=email_policy.default)
+    assert "me@gmail.com" in parsed["From"]
+    assert "Ankit Sharma" in parsed["From"]
+    assert "ada@example.com" in parsed["To"].lower()
+    assert "me@gmail.com" not in parsed["To"].lower()
+    assert payload["message"]["threadId"] == "t1"
 
 
 def test_reply_is_from_inbox_owner_not_sender() -> None:

@@ -285,3 +285,82 @@ def test_click_modifies_existing_draft_in_place(settings: Settings, store) -> No
     assert "please confirm" in text.lower() or "office hours" in text.lower()
     assert "Best regards" in text
     assert gmail.send_called is False
+
+
+def test_click_updates_live_thread_draft_when_store_id_is_gone(settings: Settings, store) -> None:
+    message = make_message()
+    gmail = FakeGmail([message])
+    bot = InboxBot(settings=settings, store=store, gmail=gmail)
+    first = bot.draft_from_open_mail("Ada <ada@example.com>", "Office hours?", "what are hours?")
+    live_id = first["draft_id"]
+    queued = bot.store.get_queue_item("m1") or {}
+    bot.store.upsert_queue({**queued, "draft_id": "r-stale-missing", "status": "drafted"})
+    result = bot.draft_from_open_mail(
+        "Ada <ada@example.com>",
+        "Office hours?",
+        "what are hours?",
+        existing_draft="hello please confirm the office hours",
+    )
+    assert len(gmail.drafts) == 1
+    assert gmail.drafts[0]["id"] == live_id
+    assert result["draft_id"] == live_id
+    assert gmail.send_called is False
+
+
+def test_click_prefers_open_gmail_draft_id(settings: Settings, store) -> None:
+    message = make_message()
+    gmail = FakeGmail([message])
+    bot = InboxBot(settings=settings, store=store, gmail=gmail)
+    first = bot.draft_from_open_mail("Ada <ada@example.com>", "Office hours?", "what are hours?")
+    live_id = first["draft_id"]
+    result = bot.draft_from_open_mail(
+        "Ada <ada@example.com>",
+        "Office hours?",
+        "what are hours?",
+        existing_draft="hello please confirm the office hours",
+        gmail_draft_id=live_id,
+    )
+    assert len(gmail.drafts) == 1
+    assert result["draft_id"] == live_id
+    assert gmail.send_called is False
+
+
+def test_click_uses_open_thread_id(settings: Settings, store) -> None:
+    first = make_message(message_id="m1", thread_id="t1", subject="Fee")
+    second = make_message(
+        message_id="m2",
+        thread_id="t2",
+        sender="Ada <ada@example.com>",
+        subject="Fee payment",
+        body="Please reopen the fee link.",
+    )
+    gmail = FakeGmail([first, second])
+    bot = InboxBot(settings=settings, store=store, gmail=gmail)
+    result = bot.draft_from_open_mail(
+        "Ada <ada@example.com>",
+        "Fee",
+        "Please reopen the fee link.",
+        thread_id="t2",
+    )
+    assert result["message_id"] == "m2"
+    assert gmail.drafts[0]["thread_id"] == "t2"
+    assert gmail.send_called is False
+
+
+def test_click_rejects_gmail_tab_for_other_account(settings: Settings, store) -> None:
+    message = make_message()
+    gmail = FakeGmail([message], profile_email="me@gmail.com")
+    bot = InboxBot(settings=settings, store=store, gmail=gmail)
+    try:
+        bot.draft_from_open_mail(
+            "Ada <ada@example.com>",
+            "Office hours?",
+            "what are hours?",
+            page_email="other@gmail.com",
+        )
+        raise AssertionError("expected account mismatch")
+    except RuntimeError as exc:
+        assert "other@gmail.com" in str(exc).lower()
+        assert "me@gmail.com" in str(exc).lower()
+    assert gmail.drafts == []
+    assert gmail.send_called is False

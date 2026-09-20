@@ -7,6 +7,7 @@ def test_extension_popup_shows_optional_url_and_notes() -> None:
     popup = (root / "popup.html").read_text(encoding="utf-8")
     script = (root / "popup.js").read_text(encoding="utf-8")
     background = (root / "background.js").read_text(encoding="utf-8")
+    content = (root / "content.js").read_text(encoding="utf-8")
     assert '"default_popup": "popup.html"' in manifest
     assert '"scripting"' in manifest
     assert "ensureGmailContent" in background
@@ -21,3 +22,8 @@ def test_extension_popup_shows_optional_url_and_notes() -> None:
     assert "notes" in script
     assert "draftFromPopup" in background
     assert "runDraft" in background
+    assert "gmailDraftId" in content
+    assert "pageEmail" in content
+    assert "g_editable" in content
+    assert "keepDraftVisible" in content
+    assert "openGmailDraft" in content

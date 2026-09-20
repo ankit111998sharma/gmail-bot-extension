@@ -78,6 +78,11 @@ def make_handler(bot: InboxBot) -> type[BaseHTTPRequestHandler]:
             existing_draft = str(data.get("existingDraft") or data.get("existing_draft") or "")
             rules_url = str(data.get("rulesUrl") or data.get("rules_url") or data.get("websiteUrl") or "")
             notes = str(data.get("notes") or data.get("description") or "")
+            thread_id = str(data.get("threadId") or data.get("thread_id") or "")
+            gmail_draft_id = str(
+                data.get("gmailDraftId") or data.get("gmail_draft_id") or data.get("draftId") or ""
+            )
+            page_email = str(data.get("pageEmail") or data.get("page_email") or "")
             if not sender and not subject:
                 self._write(400, {"ok": False, "error": "Open an email in Gmail first."})
                 return
@@ -89,6 +94,9 @@ def make_handler(bot: InboxBot) -> type[BaseHTTPRequestHandler]:
                     existing_draft=existing_draft,
                     rules_url=rules_url,
                     notes=notes,
+                    thread_id=thread_id,
+                    gmail_draft_id=gmail_draft_id,
+                    page_email=page_email,
                 )
             except Exception as exc:  # noqa: BLE001
                 logger.warning("Click-to-draft failed: %s", exc, extra={"event": "click_draft_failed"})

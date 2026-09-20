@@ -4,6 +4,8 @@ import base64
 import logging
 import re
 from email.message import EmailMessage
+from email.policy import SMTP
+from email.utils import formataddr
 from typing import Any, Protocol
 
 from google.auth.transport.requests import Request
@@ -30,9 +32,16 @@ class GmailPort(Protocol):
     def list_unread_ids(self, query: str) -> list[str]: ...
     def list_message_ids(self, query: str, limit: int = 10) -> list[str]: ...
     def get_message(self, message_id: str) -> ParsedMessage: ...
-    def create_draft_reply(self, message: ParsedMessage, reply_text: str, from_email: str = "") -> str: ...
+    def create_draft_reply(
+        self, message: ParsedMessage, reply_text: str, from_email: str = "", from_name: str = ""
+    ) -> str: ...
     def update_draft_reply(
-        self, draft_id: str, message: ParsedMessage, reply_text: str, from_email: str = ""
+        self,
+        draft_id: str,
+        message: ParsedMessage,
+        reply_text: str,
+        from_email: str = "",
+        from_name: str = "",
     ) -> str: ...
     def find_thread_draft(self, thread_id: str) -> tuple[str, str]: ...
     def delete_draft(self, draft_id: str) -> None: ...
@@ -129,24 +138,44 @@ def reply_recipient(message: ParsedMessage, from_email: str = "") -> str:
     return ""
 
 
-def build_draft_payload(message: ParsedMessage, reply_text: str, from_email: str = "") -> dict[str, Any]:
-    msg = EmailMessage()
-    msg.set_content(reply_text)
+def format_from_header(from_email: str, from_name: str = "") -> str:
+    email = (from_email or "").strip()
+    name = (from_name or "").strip()
+    if name and email and "@" not in name:
+        return formataddr((name, email))
+    return email
+
+
+def encode_rfc2822_raw(raw_bytes: bytes) -> str:
+    return base64.urlsafe_b64encode(raw_bytes).decode("ascii")
+
+
+def build_draft_payload(
+    message: ParsedMessage, reply_text: str, from_email: str = "", from_name: str = ""
+) -> dict[str, Any]:
+    """RFC 2822 reply draft: explicit From, CRLF raw, threadId + In-Reply-To/References."""
     owner = (from_email or "").strip()
-    msg["To"] = reply_recipient(message, owner)
-    if owner:
-        msg["From"] = owner
+    if not owner:
+        raise ValueError("Gmail drafts need an explicit From address from the signed-in account.")
+    to_addr = reply_recipient(message, owner)
+    if not to_addr:
+        raise ValueError("Reply drafts need a To address (the other person).")
+    msg = EmailMessage(policy=SMTP)
+    msg["From"] = format_from_header(owner, from_name)
+    msg["To"] = to_addr
     msg["Subject"] = reply_subject(message.subject)
     if message.message_id_header:
         msg["In-Reply-To"] = message.message_id_header
-        references = message.references.strip()
+        references = (message.references or "").strip()
         msg["References"] = (
-            f"{references} {message.message_id_header}".strip()
-            if references
-            else message.message_id_header
+            f"{references} {message.message_id_header}".strip() if references else message.message_id_header
         )
-    raw = base64.urlsafe_b64encode(msg.as_bytes()).decode("ascii")
-    return {"message": {"threadId": message.thread_id, "raw": raw}}
+    msg.set_content(reply_text or "", subtype="plain", charset="utf-8")
+    payload_message: dict[str, Any] = {"raw": encode_rfc2822_raw(msg.as_bytes(policy=SMTP))}
+    thread_id = (message.thread_id or "").strip()
+    if thread_id:
+        payload_message["threadId"] = thread_id
+    return {"message": payload_message}
 
 
 def parse_gmail_message(raw: dict[str, Any]) -> ParsedMessage:
@@ -262,8 +291,22 @@ class GmailAdapter:
         raw = self._call(request)
         return parse_gmail_message(raw)
 
-    def create_draft_reply(self, message: ParsedMessage, reply_text: str, from_email: str = "") -> str:
-        body = build_draft_payload(message, reply_text, from_email=from_email)
+    def _sender_identity(self, from_email: str = "", from_name: str = "") -> tuple[str, str]:
+        email = normalize_email(from_email)
+        if not email:
+            try:
+                email = normalize_email(self.get_profile_email())
+            except Exception:  # noqa: BLE001
+                email = ""
+        return (from_name or "").strip(), email
+
+    def create_draft_reply(
+        self, message: ParsedMessage, reply_text: str, from_email: str = "", from_name: str = ""
+    ) -> str:
+        name, email = self._sender_identity(from_email, from_name)
+        if not email:
+            raise RuntimeError("Gmail drafts need the signed-in account in the From header.")
+        body = build_draft_payload(message, reply_text, from_email=email, from_name=name)
         request = self.service.users().drafts().create(userId=USER, body=body)
         result = self._call(request)
         draft_id = result.get("id") or ""
@@ -276,17 +319,26 @@ class GmailAdapter:
                 "draft_id": draft_id,
                 "sender": message.sender,
                 "subject": message.subject,
-                "snippet": message.log_snippet,
+                "snippet": f"from={email} | {message.log_snippet}",
             },
         )
         return draft_id
 
     def update_draft_reply(
-        self, draft_id: str, message: ParsedMessage, reply_text: str, from_email: str = ""
+        self,
+        draft_id: str,
+        message: ParsedMessage,
+        reply_text: str,
+        from_email: str = "",
+        from_name: str = "",
     ) -> str:
         if not draft_id:
-            return self.create_draft_reply(message, reply_text, from_email=from_email)
-        body = build_draft_payload(message, reply_text, from_email=from_email)
+            return self.create_draft_reply(message, reply_text, from_email=from_email, from_name=from_name)
+        name, email = self._sender_identity(from_email, from_name)
+        if not email:
+            raise RuntimeError("Gmail drafts need the signed-in account in the From header.")
+        body = build_draft_payload(message, reply_text, from_email=email, from_name=name)
+        body["id"] = draft_id
         request = self.service.users().drafts().update(userId=USER, id=draft_id, body=body)
         result = self._call(request)
         updated = result.get("id") or draft_id
@@ -308,18 +360,47 @@ class GmailAdapter:
         want = (thread_id or "").strip()
         if not want:
             return "", ""
-        result = self._call(self.service.users().drafts().list(userId=USER, maxResults=40))
-        for item in result.get("drafts") or []:
-            message = item.get("message") or {}
-            if (message.get("threadId") or "") != want:
-                continue
-            draft_id = str(item.get("id") or "")
-            if not draft_id:
-                continue
-            full = self._call(self.service.users().drafts().get(userId=USER, id=draft_id, format="full"))
-            payload = (full.get("message") or {}).get("payload") or {}
-            return draft_id, extract_body(payload)
-        return "", ""
+        if not self._thread_has_draft(want):
+            return "", ""
+        draft_id = self._draft_id_for_thread(want)
+        if not draft_id:
+            return "", ""
+        full = self._call(self.service.users().drafts().get(userId=USER, id=draft_id, format="full"))
+        payload = (full.get("message") or {}).get("payload") or {}
+        return draft_id, extract_body(payload)
+
+    def _thread_has_draft(self, thread_id: str) -> bool:
+        try:
+            thread = self._call(self.service.users().threads().get(userId=USER, id=thread_id, format="minimal"))
+        except HttpError:
+            return True
+        messages = thread.get("messages") or []
+        if not messages:
+            return True
+        saw_labels = False
+        for item in messages:
+            labels = item.get("labelIds") or []
+            if labels:
+                saw_labels = True
+            if "DRAFT" in labels:
+                return True
+        return not saw_labels
+
+    def _draft_id_for_thread(self, thread_id: str) -> str:
+        page_token = None
+        for _ in range(10):
+            kwargs: dict[str, Any] = {"userId": USER, "maxResults": 100}
+            if page_token:
+                kwargs["pageToken"] = page_token
+            result = self._call(self.service.users().drafts().list(**kwargs))
+            for item in result.get("drafts") or []:
+                message = item.get("message") or {}
+                if (message.get("threadId") or "") == thread_id and item.get("id"):
+                    return str(item["id"])
+            page_token = result.get("nextPageToken")
+            if not page_token:
+                break
+        return ""
 
     def delete_draft(self, draft_id: str) -> None:
         if not draft_id:

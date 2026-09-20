@@ -82,6 +82,8 @@ class FakeGmail:
         sent_only = "in:sent" in q
         from_match = re.search(r"(?<!-)from:([^\s\"']+)", q)
         from_token = (from_match.group(1) if from_match else "").strip("\"'")
+        thread_match = re.search(r"(?:^|\s)thread:([^\s]+)", q)
+        thread_token = (thread_match.group(1) if thread_match else "").strip("\"'")
         subject_token = ""
         if "subject:" in q:
             subject_token = q.split("subject:", 1)[1].strip().strip("\"'")
@@ -89,6 +91,8 @@ class FakeGmail:
         for message in self.messages.values():
             sender = (message.sender or "").lower()
             is_mine = bool(mine and mine in sender)
+            if thread_token and (message.thread_id or "").lower() != thread_token:
+                continue
             if skip_me and is_mine:
                 continue
             if sent_only and not is_mine:
@@ -107,7 +111,9 @@ class FakeGmail:
     def get_message(self, message_id: str) -> ParsedMessage:
         return self.messages[message_id]
 
-    def create_draft_reply(self, message: ParsedMessage, reply_text: str, from_email: str = "") -> str:
+    def create_draft_reply(
+        self, message: ParsedMessage, reply_text: str, from_email: str = "", from_name: str = ""
+    ) -> str:
         from gmail_bot.gmail_adapter import reply_recipient
 
         draft_id = f"draft-{len(self.drafts) + 1}"
@@ -117,6 +123,7 @@ class FakeGmail:
                 "thread_id": message.thread_id,
                 "to": reply_recipient(message, from_email),
                 "from": from_email,
+                "from_name": from_name,
                 "text": reply_text,
                 "message_id_header": message.message_id_header,
             }
@@ -124,7 +131,12 @@ class FakeGmail:
         return draft_id
 
     def update_draft_reply(
-        self, draft_id: str, message: ParsedMessage, reply_text: str, from_email: str = ""
+        self,
+        draft_id: str,
+        message: ParsedMessage,
+        reply_text: str,
+        from_email: str = "",
+        from_name: str = "",
     ) -> str:
         from gmail_bot.gmail_adapter import reply_recipient
 
@@ -132,9 +144,10 @@ class FakeGmail:
             if row["id"] == draft_id:
                 row["text"] = reply_text
                 row["from"] = from_email
+                row["from_name"] = from_name
                 row["to"] = reply_recipient(message, from_email)
                 return draft_id
-        return self.create_draft_reply(message, reply_text, from_email=from_email)
+        raise RuntimeError("Requested entity was not found.")
 
     def find_thread_draft(self, thread_id: str) -> tuple[str, str]:
         for row in reversed(self.drafts):
