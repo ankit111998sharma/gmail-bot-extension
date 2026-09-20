@@ -69,3 +69,5 @@ class BotStatus:
     poll_seconds: int
     gmail_query: str
     label_name: str
+    target_email: str = ""
+    connected_email: str = ""

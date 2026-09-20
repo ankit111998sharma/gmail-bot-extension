@@ -5,7 +5,7 @@ import json
 from pathlib import Path
 
 from gmail_bot.bot import InboxBot
-from gmail_bot.config import load_settings
+from gmail_bot.config import load_settings, normalize_email
 from gmail_bot.gmail_adapter import GmailAdapter
 from gmail_bot.logging_setup import setup_logging
 from gmail_bot.rag import KnowledgeBase
@@ -16,10 +16,15 @@ def cmd_auth(args: argparse.Namespace) -> int:
     settings = load_settings()
     setup_logging(settings.log_path)
     adapter = GmailAdapter(settings)
-    adapter.authenticate(open_browser=True)
+    hint = normalize_email(getattr(args, "email", "") or settings.gmail_account)
+    adapter.authenticate(open_browser=True, force=bool(hint), login_hint=hint)
+    profile = adapter.get_profile_email()
+    if hint and profile.lower() != hint:
+        print(f"Signed in as {profile}, but you asked for {hint}.")
+        return 1
     labels = adapter.service.users().labels().list(userId="me").execute()
     names = sorted(label.get("name", "") for label in labels.get("labels") or [])
-    print(f"Gmail OAuth OK. {len(names)} labels visible.")
+    print(f"Gmail OAuth OK for {profile}. {len(names)} labels visible.")
     print("Token saved to", settings.token_path)
     return 0
 
@@ -75,6 +80,7 @@ def build_parser() -> argparse.ArgumentParser:
     sub = parser.add_subparsers(dest="command", required=True)
 
     auth = sub.add_parser("auth", help="Open a browser and store Gmail OAuth tokens")
+    auth.add_argument("--email", help="Gmail address to sign in as")
     auth.set_defaults(func=cmd_auth)
 
     inbox = sub.add_parser("inbox", help="Poll unread mail and create draft replies")

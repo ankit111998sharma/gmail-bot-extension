@@ -25,7 +25,8 @@ logger = logging.getLogger("gmail_bot")
 
 class GmailPort(Protocol):
     def oauth_ready(self) -> bool: ...
-    def authenticate(self) -> None: ...
+    def authenticate(self, open_browser: bool = True, force: bool = False, login_hint: str = "") -> None: ...
+    def get_profile_email(self) -> str: ...
     def list_unread_ids(self, query: str) -> list[str]: ...
     def get_message(self, message_id: str) -> ParsedMessage: ...
     def create_draft_reply(self, message: ParsedMessage, reply_text: str) -> str: ...
@@ -138,13 +139,16 @@ class GmailAdapter:
     def oauth_ready(self) -> bool:
         return self.settings.token_path.is_file() and self.settings.credentials_path.is_file()
 
-    def authenticate(self, open_browser: bool = True) -> None:
+    def authenticate(self, open_browser: bool = True, force: bool = False, login_hint: str = "") -> None:
         self.settings.ensure_dirs()
+        if force and self.settings.token_path.is_file():
+            self.settings.token_path.unlink()
+            self._service = None
         creds = None
         if self.settings.token_path.is_file():
             creds = Credentials.from_authorized_user_file(str(self.settings.token_path), SCOPES)
         if not creds or not creds.valid:
-            if creds and creds.expired and creds.refresh_token:
+            if creds and creds.expired and creds.refresh_token and not force:
                 creds.refresh(Request())
             else:
                 if not self.settings.credentials_path.is_file():
@@ -153,11 +157,18 @@ class GmailAdapter:
                         "Download a Desktop app client JSON from Google Cloud and save it there."
                     )
                 if not open_browser:
-                    raise RuntimeError("Gmail token missing or expired. Run: python -m gmail_bot auth")
+                    raise RuntimeError("Gmail token missing or expired. Connect the Gmail address from the app.")
                 flow = InstalledAppFlow.from_client_secrets_file(str(self.settings.credentials_path), SCOPES)
-                creds = flow.run_local_server(port=0)
+                kwargs: dict[str, Any] = {"port": 0}
+                if login_hint:
+                    kwargs["login_hint"] = login_hint
+                creds = flow.run_local_server(**kwargs)
             self.settings.token_path.write_text(creds.to_json(), encoding="utf-8")
         self._service = build("gmail", "v1", credentials=creds, cache_discovery=False)
+
+    def get_profile_email(self) -> str:
+        result = self._call(self.service.users().getProfile(userId=USER))
+        return (result.get("emailAddress") or "").strip()
 
     @property
     def service(self) -> Any:

@@ -54,20 +54,62 @@ def _controller():
 
 
 def _status_text(status) -> str:
+    if status.target_email and status.connected_email and status.target_email != status.connected_email:
+        return f"This bot is set to {status.target_email}, but Gmail is signed in as {status.connected_email}."
+    if status.target_email and not status.connected_email:
+        return f"Use {status.target_email}. Click Connect this Gmail and sign in as that account."
     if not status.oauth_ready:
-        return "Gmail is not connected. Open Setup, then run python -m gmail_bot auth."
+        return "Enter the Gmail address below, then connect it."
     if status.running and status.paused:
-        return "Paused. Nothing is being checked right now."
+        return f"Paused for {status.connected_email or status.target_email or 'Gmail'}."
     if status.running:
-        return "Running. Drafts only — mail stays unread and is never sent."
-    return "Stopped. Use Start when you want it to check unread mail."
+        account = status.connected_email or status.target_email or "the signed-in Gmail"
+        return f"Running for {account}. Drafts only — mail stays unread and is never sent."
+    if status.connected_email:
+        return f"Ready for {status.connected_email}. Use Start to check unread mail."
+    return "Stopped. Enter a Gmail address, connect it, then start."
+
+
+def render_account(bot) -> None:
+    status = bot.status()
+    if "gmail_account_input" not in st.session_state:
+        st.session_state.gmail_account_input = status.target_email
+    st.markdown("##### Gmail to use")
+    st.text_input(
+        "Email address",
+        key="gmail_account_input",
+        placeholder="you@gmail.com",
+        label_visibility="collapsed",
+    )
+    save_col, connect_col = st.columns(2)
+    if save_col.button("Use this email", width="stretch"):
+        try:
+            email = bot.set_target_email(st.session_state.gmail_account_input)
+            st.success(f"Saved {email}. The bot will only use this inbox.")
+        except Exception as exc:  # noqa: BLE001
+            st.error(str(exc))
+    if connect_col.button("Connect this Gmail", width="stretch"):
+        try:
+            with st.spinner("A browser window will open. Sign in with that same Gmail."):
+                email = bot.connect_account(st.session_state.gmail_account_input)
+            st.success(f"Connected {email}.")
+            st.rerun()
+        except Exception as exc:  # noqa: BLE001
+            st.error(str(exc))
+    if status.connected_email:
+        st.caption(f"Signed in as {status.connected_email}")
+    elif status.target_email:
+        st.caption(f"Saved {status.target_email} — not signed in yet")
+    else:
+        st.caption("The bot will only draft mail for the Gmail you enter here.")
 
 
 def render_home(bot) -> None:
     status = bot.status()
     st.markdown(f'<div class="status-line">{_status_text(status)}</div>', unsafe_allow_html=True)
+    render_account(bot)
     if not status.oauth_ready:
-        st.warning("Save `data/gmail/credentials.json`, then run `python -m gmail_bot auth`.")
+        st.warning("Save `data/gmail/credentials.json` first, then click Connect this Gmail.")
     if status.last_error:
         st.error(status.last_error)
 
@@ -180,7 +222,7 @@ def render_setup(bot) -> None:
     settings = bot.settings
     creds_ok = settings.credentials_path.is_file()
     token_ok = settings.token_path.is_file()
-    st.caption("Connect Gmail once. After that, this folder can move to another PC.")
+    st.caption("Connect the Gmail you typed on Home. After that, this folder can move to another PC.")
     c1, c2 = st.columns(2)
     c1.write("Credentials file")
     c1.write("Ready" if creds_ok else "Missing")
@@ -191,8 +233,9 @@ def render_setup(bot) -> None:
 1. Google Cloud → enable **Gmail API**
 2. Create a Desktop OAuth client
 3. Save it as `data/gmail/credentials.json`
-4. Run `python -m gmail_bot auth` and sign in
-5. This app only writes drafts. It never sends mail.
+4. On **Home**, type the Gmail address and click **Connect this Gmail**
+5. Sign in as that same address. The bot only uses that inbox.
+6. This app only writes drafts. It never sends mail.
         """
     )
 

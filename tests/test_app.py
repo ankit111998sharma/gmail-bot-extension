@@ -14,6 +14,8 @@ def test_simple_home_layout_renders() -> None:
     assert "Start" in labels
     assert "Pause" in labels
     assert "Stop" in labels
+    assert "Use this email" in labels
+    assert "Connect this Gmail" in labels
 
 
 def test_start_pause_stop_do_not_crash_ui() -> None:

@@ -1,12 +1,23 @@
 from __future__ import annotations
 
 import os
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
 from dotenv import load_dotenv
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
+
+_EMAIL_RE = re.compile(r"([A-Z0-9._%+\-]+@[A-Z0-9.\-]+\.[A-Z]{2,})", re.I)
+
+
+def normalize_email(value: str | None) -> str:
+    text = (value or "").strip()
+    if not text:
+        return ""
+    match = _EMAIL_RE.search(text)
+    return (match.group(1) if match else "").lower()
 
 
 def _as_int(value: str | None, default: int) -> int:
@@ -35,6 +46,7 @@ class Settings:
     retrieve_k: int = 5
     gmail_min_interval: float = 0.25
     assistant_name: str = "Gmail Bot"
+    gmail_account: str = ""
 
     def ensure_dirs(self) -> None:
         self.credentials_path.parent.mkdir(parents=True, exist_ok=True)
@@ -84,6 +96,7 @@ def load_settings(project_root: Path | None = None) -> Settings:
         sent_example_limit=_as_int(os.getenv("SENT_EXAMPLE_LIMIT"), 20),
         retrieve_k=_as_int(os.getenv("RETRIEVE_K"), 5),
         assistant_name=os.getenv("ASSISTANT_NAME", "Gmail Bot"),
+        gmail_account=normalize_email(os.getenv("GMAIL_ACCOUNT", "")),
     )
     settings.ensure_dirs()
     return settings

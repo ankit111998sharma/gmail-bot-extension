@@ -58,6 +58,11 @@ CREATE TABLE IF NOT EXISTS job_log (
     event TEXT NOT NULL,
     payload TEXT
 );
+
+CREATE TABLE IF NOT EXISTS app_settings (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+);
 """
 
 
@@ -212,6 +217,20 @@ class Store:
             (utcnow(), level, event, payload),
         )
         self._conn.commit()
+
+    def set_setting(self, key: str, value: str) -> None:
+        self._conn.execute(
+            """
+            INSERT INTO app_settings (key, value) VALUES (?, ?)
+            ON CONFLICT(key) DO UPDATE SET value = excluded.value
+            """,
+            (key, value),
+        )
+        self._conn.commit()
+
+    def get_setting(self, key: str, default: str = "") -> str:
+        row = self._conn.execute("SELECT value FROM app_settings WHERE key = ?", (key,)).fetchone()
+        return str(row["value"]) if row and row["value"] is not None else default
 
     def recent_job_logs(self, limit: int = 40) -> list[dict[str, Any]]:
         rows = self._conn.execute(

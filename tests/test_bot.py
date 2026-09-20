@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from gmail_bot.bot import InboxBot, matches_filters
-from gmail_bot.config import Settings
+from gmail_bot.config import Settings, normalize_email
 from tests.conftest import FakeGmail, make_message
 
 
@@ -55,6 +55,51 @@ def test_sender_filter(settings: Settings) -> None:
     assert matches_filters(make_message(), settings) is True
     other = make_message(sender="Bob <bob@example.com>")
     assert matches_filters(other, settings) is False
+
+
+def test_normalize_email() -> None:
+    assert normalize_email("Ada <ada@example.com>") == "ada@example.com"
+    assert normalize_email("  YOU@Gmail.Com ") == "you@gmail.com"
+    assert normalize_email("not-an-email") == ""
+
+
+def test_set_target_email_is_saved(settings: Settings, store) -> None:
+    gmail = FakeGmail([])
+    bot = InboxBot(settings=settings, store=store, gmail=gmail)
+    assert bot.set_target_email("Ada <ada@example.com>") == "ada@example.com"
+    assert store.get_setting("gmail_account") == "ada@example.com"
+    assert bot.status().target_email == "ada@example.com"
+
+
+def test_connect_account_uses_typed_email(settings: Settings, store) -> None:
+    gmail = FakeGmail([], profile_email="old@example.com")
+    bot = InboxBot(settings=settings, store=store, gmail=gmail)
+    assert bot.connect_account("new@example.com") == "new@example.com"
+    assert gmail.profile_email == "new@example.com"
+    assert store.get_setting("connected_email") == "new@example.com"
+
+
+def test_process_once_rejects_other_signed_in_account(settings: Settings, store) -> None:
+    message = make_message()
+    gmail = FakeGmail([message], profile_email="other@example.com")
+    bot = InboxBot(settings=settings, store=store, gmail=gmail)
+    bot.set_target_email("ada@example.com")
+    try:
+        bot.process_once()
+        raise AssertionError("expected account mismatch")
+    except RuntimeError as exc:
+        assert "ada@example.com" in str(exc)
+        assert "other@example.com" in str(exc)
+    assert gmail.drafts == []
+
+
+def test_process_once_runs_for_matching_account(settings: Settings, store) -> None:
+    message = make_message()
+    gmail = FakeGmail([message], profile_email="ada@example.com")
+    bot = InboxBot(settings=settings, store=store, gmail=gmail)
+    bot.set_target_email("ada@example.com")
+    assert bot.process_once() == 1
+    assert store.get_setting("connected_email") == "ada@example.com"
 
 
 def test_style_fetch_failure_is_not_retried(settings: Settings, store) -> None:

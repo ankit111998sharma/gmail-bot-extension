@@ -48,6 +48,8 @@ python -m gmail_bot auth
 
 That writes `data/gmail/token.json`. Both JSON files stay in this folder and are gitignored. Publishing the OAuth app is not required for your own account.
 
+You can also type the Gmail address on the Home screen and click **Connect this Gmail**. The bot only uses that inbox. To switch accounts, enter the new address and connect again.
+
 ## CLI
 
 ```bash

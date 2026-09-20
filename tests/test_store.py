@@ -23,3 +23,5 @@ def test_queue_and_processed_roundtrip(store: Store) -> None:
     assert item["subject"] == "Hi"
     store.upsert_template("thanks", "Thank you.")
     assert store.list_templates()[0]["name"] == "thanks"
+    store.set_setting("gmail_account", "ada@example.com")
+    assert store.get_setting("gmail_account") == "ada@example.com"

@@ -4,7 +4,7 @@ import logging
 import threading
 from datetime import datetime, timezone
 
-from gmail_bot.config import Settings, load_settings
+from gmail_bot.config import Settings, load_settings, normalize_email
 from gmail_bot.draft_engine import generate_reply
 from gmail_bot.gmail_adapter import GmailAdapter, GmailPort
 from gmail_bot.llm import LlmPort, build_llm
@@ -65,6 +65,9 @@ class InboxBot:
         self._fail_streak = 0
         self._style_cache: list[StyleExample] = []
         self._style_loaded = False
+        saved_account = normalize_email(self.store.get_setting("gmail_account"))
+        if saved_account:
+            self.settings.gmail_account = saved_account
 
     def status(self) -> BotStatus:
         counts = self.store.queue_counts()
@@ -82,9 +85,66 @@ class InboxBot:
             poll_seconds=self.settings.poll_seconds,
             gmail_query=self.settings.gmail_query,
             label_name=self.settings.label_name,
+            target_email=normalize_email(self.settings.gmail_account),
+            connected_email=normalize_email(self.store.get_setting("connected_email")),
         )
 
+    def set_target_email(self, email: str) -> str:
+        cleaned = normalize_email(email)
+        if not cleaned:
+            raise ValueError("Enter a valid email address, for example you@gmail.com.")
+        previous = normalize_email(self.settings.gmail_account)
+        self.settings.gmail_account = cleaned
+        self.store.set_setting("gmail_account", cleaned)
+        if previous and previous != cleaned:
+            self._style_loaded = False
+            self._style_cache = []
+            self.store.replace_style_examples([])
+            self.store.set_setting("connected_email", "")
+        return cleaned
+
+    def connect_account(self, email: str) -> str:
+        cleaned = self.set_target_email(email)
+        current = ""
+        if self.gmail.oauth_ready():
+            try:
+                current = normalize_email(self.gmail.get_profile_email())
+            except Exception:  # noqa: BLE001
+                current = ""
+        self.gmail.authenticate(open_browser=True, force=current != cleaned, login_hint=cleaned)
+        profile = normalize_email(self.gmail.get_profile_email())
+        if profile != cleaned:
+            raise RuntimeError(
+                f"Signed in as {profile or 'unknown'}, but you asked for {cleaned}. "
+                "Choose that same Gmail in the browser window."
+            )
+        self.store.set_setting("connected_email", profile)
+        self.last_activity = f"connected {profile} at {_utcnow()}"
+        return profile
+
+    def _assert_account(self) -> None:
+        target = normalize_email(self.settings.gmail_account)
+        if not target:
+            return
+        if not self.gmail.oauth_ready() and not getattr(self.gmail, "_service", None):
+            raise RuntimeError(f"Connect {target} first, then start the bot.")
+        getter = getattr(self.gmail, "get_profile_email", None)
+        if not callable(getter):
+            return
+        try:
+            profile = normalize_email(getter())
+        except Exception as exc:  # noqa: BLE001
+            raise RuntimeError(f"Could not read the signed-in Gmail account: {exc}") from exc
+        if profile and profile != target:
+            raise RuntimeError(
+                f"This bot is set to {target}, but Gmail is signed in as {profile}. "
+                "Enter that address or click Connect this Gmail."
+            )
+        if profile:
+            self.store.set_setting("connected_email", profile)
+
     def start(self) -> None:
+        self._assert_account()
         with self._lock:
             if self._thread and self._thread.is_alive() and not self._stop.is_set():
                 self._paused.clear()
@@ -132,7 +192,8 @@ class InboxBot:
     def process_once(self) -> int:
         drafted = 0
         if not self.gmail.oauth_ready() and not getattr(self.gmail, "_service", None):
-            raise RuntimeError("Gmail OAuth is not ready. Run python -m gmail_bot auth")
+            raise RuntimeError("Gmail OAuth is not ready. Connect the Gmail address from the app.")
+        self._assert_account()
         self._refresh_style_examples()
         ids = self.gmail.list_unread_ids(self.settings.gmail_query)
         self.last_poll = _utcnow()

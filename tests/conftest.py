@@ -48,18 +48,25 @@ def make_message(**kwargs) -> ParsedMessage:
 
 
 class FakeGmail:
-    def __init__(self, messages: list[ParsedMessage] | None = None) -> None:
+    def __init__(self, messages: list[ParsedMessage] | None = None, profile_email: str = "ada@example.com") -> None:
         self.messages = {m.message_id: m for m in messages or []}
         self.drafts: list[dict] = []
         self.labels: list[tuple[str, str]] = []
         self.sent_examples: list[StyleExample] = []
         self.send_called = False
+        self.profile_email = profile_email
+        self.auth_hints: list[str] = []
 
     def oauth_ready(self) -> bool:
         return True
 
-    def authenticate(self) -> None:
-        return None
+    def authenticate(self, open_browser: bool = True, force: bool = False, login_hint: str = "") -> None:
+        self.auth_hints.append(login_hint)
+        if login_hint:
+            self.profile_email = login_hint
+
+    def get_profile_email(self) -> str:
+        return self.profile_email
 
     def list_unread_ids(self, query: str) -> list[str]:
         return list(self.messages.keys())
