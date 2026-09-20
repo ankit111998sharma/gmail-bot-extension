@@ -48,7 +48,7 @@ def make_message(**kwargs) -> ParsedMessage:
 
 
 class FakeGmail:
-    def __init__(self, messages: list[ParsedMessage] | None = None, profile_email: str = "ada@example.com") -> None:
+    def __init__(self, messages: list[ParsedMessage] | None = None, profile_email: str = "me@gmail.com") -> None:
         self.messages = {m.message_id: m for m in messages or []}
         self.drafts: list[dict] = []
         self.labels: list[tuple[str, str]] = []
@@ -94,13 +94,16 @@ class FakeGmail:
     def get_message(self, message_id: str) -> ParsedMessage:
         return self.messages[message_id]
 
-    def create_draft_reply(self, message: ParsedMessage, reply_text: str) -> str:
+    def create_draft_reply(self, message: ParsedMessage, reply_text: str, from_email: str = "") -> str:
+        from gmail_bot.gmail_adapter import reply_recipient
+
         draft_id = f"draft-{len(self.drafts) + 1}"
         self.drafts.append(
             {
                 "id": draft_id,
                 "thread_id": message.thread_id,
-                "to": message.draft_to,
+                "to": reply_recipient(message, from_email),
+                "from": from_email,
                 "text": reply_text,
                 "message_id_header": message.message_id_header,
             }

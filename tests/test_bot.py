@@ -25,6 +25,10 @@ def test_process_creates_draft_and_label(settings: Settings, store) -> None:
     assert gmail.labels == [(message.message_id, settings.label_name)]
     assert store.already_processed(message.message_id)
     assert "DRAFT" in gmail.drafts[0]["text"]
+    assert gmail.drafts[0]["from"] == "me@gmail.com"
+    assert "ada@example.com" in gmail.drafts[0]["to"].lower()
+    assert gmail.drafts[0]["from"] != gmail.drafts[0]["to"]
+    assert "me" in gmail.drafts[0]["text"].split("Best regards")[-1].lower()
 
 
 def test_second_pass_does_not_duplicate(settings: Settings, store) -> None:

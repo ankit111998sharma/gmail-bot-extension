@@ -10,6 +10,7 @@ from gmail_bot.gmail_adapter import (
     build_draft_payload,
     extract_body,
     parse_gmail_message,
+    reply_recipient,
     reply_subject,
 )
 from tests.conftest import make_message
@@ -48,16 +49,29 @@ def test_extract_html_fallback() -> None:
 
 def test_draft_payload_threads_and_headers() -> None:
     message = make_message(references="<prev@mail.example.com>")
-    payload = build_draft_payload(message, "Thanks, we are open 9 to 6.")
+    payload = build_draft_payload(message, "Thanks, we are open 9 to 6.", from_email="me@gmail.com")
     assert payload["message"]["threadId"] == "t1"
     raw = base64.urlsafe_b64decode(payload["message"]["raw"].encode("ascii"))
     parsed = message_from_bytes(raw, policy=email_policy.default)
+    assert parsed["From"] == "me@gmail.com"
     assert parsed["To"] == "Ada <ada@example.com>"
+    assert parsed["From"] != parsed["To"]
     assert parsed["Subject"].lower().startswith("re:")
     assert parsed["In-Reply-To"] == "<id-1@mail.example.com>"
     assert "<prev@mail.example.com>" in parsed["References"]
     assert "<id-1@mail.example.com>" in parsed["References"]
     assert "9 to 6" in parsed.get_content()
+
+
+def test_reply_is_from_inbox_owner_not_sender() -> None:
+    message = make_message(reply_to="me@gmail.com")
+    assert reply_recipient(message, "me@gmail.com") == "Ada <ada@example.com>"
+    payload = build_draft_payload(message, "I will follow up.", from_email="me@gmail.com")
+    raw = base64.urlsafe_b64decode(payload["message"]["raw"].encode("ascii"))
+    parsed = message_from_bytes(raw, policy=email_policy.default)
+    assert parsed["From"] == "me@gmail.com"
+    assert "ada@example.com" in parsed["To"].lower()
+    assert "me@gmail.com" not in parsed["To"].lower()
 
 
 def test_reply_subject_keeps_existing_re() -> None:

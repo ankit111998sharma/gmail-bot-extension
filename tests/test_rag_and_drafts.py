@@ -28,10 +28,14 @@ def test_faq_retrieval_and_placeholder_uses_answer(store, settings) -> None:
     assert "9 AM" in hits[0].text
 
     message = make_message()
-    draft = generate_reply(message, hits, [], PlaceholderLlm())
+    draft = generate_reply(
+        message, hits, [], PlaceholderLlm(), assistant_name="asharma", owner_email="me@gmail.com"
+    )
     assert draft.engine == "placeholder"
     assert "9 AM" in draft.text
     assert draft.language == "en"
+    assert "asharma" in draft.text
+    assert "Ada" not in draft.text.split("Best regards")[-1]
 
 
 def test_hindi_placeholder_without_context() -> None:

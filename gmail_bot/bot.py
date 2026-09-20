@@ -150,6 +150,20 @@ class InboxBot:
         if profile:
             self.store.set_setting("connected_email", profile)
 
+    def _owner_identity(self) -> tuple[str, str]:
+        email = normalize_email(self.store.get_setting("connected_email") or self.settings.gmail_account)
+        if not email:
+            getter = getattr(self.gmail, "get_profile_email", None)
+            if callable(getter):
+                try:
+                    email = normalize_email(getter())
+                except Exception:  # noqa: BLE001
+                    email = ""
+        name = (self.settings.assistant_name or "").strip()
+        if not name or name.lower() in {"gmail bot", "gmailbot", "automated assistant"}:
+            name = email.split("@")[0] if email else "Me"
+        return name, email
+
     def start(self) -> None:
         self._assert_account()
         with self._lock:
@@ -307,14 +321,16 @@ class InboxBot:
         try:
             query = f"{message.subject}\n{message.body}"
             chunks = self.knowledge.retrieve(query, k=self.settings.retrieve_k)
+            owner_name, owner_email = self._owner_identity()
             draft = generate_reply(
                 message,
                 chunks,
                 self._style_cache,
                 self.llm,
-                assistant_name=self.settings.assistant_name,
+                assistant_name=owner_name,
+                owner_email=owner_email,
             )
-            draft_id = self.gmail.create_draft_reply(message, draft.text)
+            draft_id = self.gmail.create_draft_reply(message, draft.text, from_email=owner_email)
             self.gmail.apply_label(message.message_id, self.settings.label_name)
             self.store.mark_processed(message.message_id, message.thread_id, draft_id)
             self.store.upsert_queue(

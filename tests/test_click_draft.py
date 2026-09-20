@@ -13,6 +13,8 @@ def test_click_drafts_only_matching_open_email(settings: Settings, store) -> Non
     assert result["message_id"] == "m1"
     assert len(gmail.drafts) == 1
     assert gmail.drafts[0]["thread_id"] == "t1"
+    assert gmail.drafts[0]["from"] == "me@gmail.com"
+    assert "ada@example.com" in gmail.drafts[0]["to"].lower()
     assert gmail.send_called is False
 
 

@@ -12,7 +12,7 @@ from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 
-from gmail_bot.config import Settings
+from gmail_bot.config import Settings, normalize_email
 from gmail_bot.language import detect_language
 from gmail_bot.models import ParsedMessage, StyleExample, short_snippet
 from gmail_bot.resilience import RateLimiter, retry_call
@@ -30,7 +30,7 @@ class GmailPort(Protocol):
     def list_unread_ids(self, query: str) -> list[str]: ...
     def list_message_ids(self, query: str, limit: int = 10) -> list[str]: ...
     def get_message(self, message_id: str) -> ParsedMessage: ...
-    def create_draft_reply(self, message: ParsedMessage, reply_text: str) -> str: ...
+    def create_draft_reply(self, message: ParsedMessage, reply_text: str, from_email: str = "") -> str: ...
     def apply_label(self, message_id: str, label_name: str) -> None: ...
     def fetch_sent_examples(self, limit: int = 20) -> list[StyleExample]: ...
 
@@ -93,10 +93,23 @@ def reply_subject(subject: str | None) -> str:
     return value if value.lower().startswith("re:") else f"Re: {value}"
 
 
-def build_draft_payload(message: ParsedMessage, reply_text: str) -> dict[str, Any]:
+def reply_recipient(message: ParsedMessage, from_email: str = "") -> str:
+    """Address the original sender, never the inbox owner."""
+    mine = normalize_email(from_email)
+    for candidate in (message.reply_to, message.sender):
+        email = normalize_email(candidate)
+        if email and email != mine:
+            return candidate.strip()
+    return (message.sender or message.reply_to or "").strip()
+
+
+def build_draft_payload(message: ParsedMessage, reply_text: str, from_email: str = "") -> dict[str, Any]:
     msg = EmailMessage()
     msg.set_content(reply_text)
-    msg["To"] = message.draft_to
+    owner = (from_email or "").strip()
+    msg["To"] = reply_recipient(message, owner)
+    if owner:
+        msg["From"] = owner
     msg["Subject"] = reply_subject(message.subject)
     if message.message_id_header:
         msg["In-Reply-To"] = message.message_id_header
@@ -214,8 +227,8 @@ class GmailAdapter:
         raw = self._call(request)
         return parse_gmail_message(raw)
 
-    def create_draft_reply(self, message: ParsedMessage, reply_text: str) -> str:
-        body = build_draft_payload(message, reply_text)
+    def create_draft_reply(self, message: ParsedMessage, reply_text: str, from_email: str = "") -> str:
+        body = build_draft_payload(message, reply_text, from_email=from_email)
         request = self.service.users().drafts().create(userId=USER, body=body)
         result = self._call(request)
         draft_id = result.get("id") or ""
