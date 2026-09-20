@@ -198,9 +198,44 @@ function findComposeBox() {
   return null;
 }
 
+function stripQuotedText(text) {
+  const lines = String(text || "").replace(/\r\n/g, "\n").split("\n");
+  const kept = [];
+  for (const line of lines) {
+    const stripped = line.trim();
+    if (/^On .+wrote:\s*$/i.test(stripped)) {
+      break;
+    }
+    if (/^On .{10,140}$/i.test(stripped) && !/wrote:/i.test(stripped)) {
+      break;
+    }
+    if (stripped.startsWith(">")) {
+      continue;
+    }
+    if (stripped === "--" || /^-+ forwarded message -+$/i.test(stripped)) {
+      break;
+    }
+    if (/^begin forwarded message/i.test(stripped)) {
+      break;
+    }
+    kept.push(line);
+  }
+  return kept.join("\n").trim();
+}
+
+function composeBodyText(box) {
+  if (!box) {
+    return "";
+  }
+  const copy = box.cloneNode(true);
+  copy.querySelectorAll(
+    ".gmail_quote, .gmail_quote_container, .gmail_extra, .gmail_signature, blockquote"
+  ).forEach((el) => el.remove());
+  return stripQuotedText(copy.innerText || copy.textContent || "");
+}
+
 function readComposeText() {
-  const box = findComposeBox();
-  return box ? (box.innerText || "").trim() : "";
+  return composeBodyText(findComposeBox());
 }
 
 function clickCompose() {
@@ -271,27 +306,50 @@ function readThreadId() {
   return /^[a-f0-9]{10,}$/i.test(last) ? last : "";
 }
 
+function normalizeGmailDraftId(value) {
+  let raw = String(value || "").trim();
+  if (!raw) {
+    return "";
+  }
+  try {
+    raw = decodeURIComponent(raw);
+  } catch (_error) {
+    /* Keep the raw compose id if it is not encoded. */
+  }
+  raw = raw.split(",")[0].trim();
+  const colon = raw.lastIndexOf(":");
+  if (colon >= 0) {
+    raw = raw.slice(colon + 1);
+  }
+  raw = raw.replace(/^#/, "").trim();
+  if (!raw || raw.toLowerCase() === "new") {
+    return "";
+  }
+  return raw;
+}
+
 function readComposeDraftId() {
   const href = location.href || "";
   const match = href.match(/[?&#]compose=([^&#]+)/i);
   if (match) {
-    const first = decodeURIComponent(match[1] || "")
-      .split(",")[0]
-      .trim();
-    if (first && first !== "new") {
-      return first;
+    const id = normalizeGmailDraftId(match[1]);
+    if (id) {
+      return id;
     }
   }
   const hidden = document.querySelector('input[name="draft"], input[name="draft_id"]');
-  if (hidden && hidden.value && hidden.value !== "new") {
-    return String(hidden.value);
+  if (hidden && hidden.value) {
+    const id = normalizeGmailDraftId(hidden.value);
+    if (id) {
+      return id;
+    }
   }
   const tagged = document.querySelector("[data-draft-id]");
-  return tagged?.getAttribute("data-draft-id") || "";
+  return normalizeGmailDraftId(tagged?.getAttribute("data-draft-id") || "");
 }
 
 function openGmailDraft(draftId) {
-  const id = String(draftId || "").trim();
+  const id = normalizeGmailDraftId(draftId);
   if (!id || id === "new") {
     return;
   }
@@ -346,7 +404,7 @@ function hasDraftText(box, text) {
   if (!needle || !box) {
     return false;
   }
-  const have = (box.innerText || box.textContent || "").replace(/\s+/g, " ");
+  const have = composeBodyText(box).replace(/\s+/g, " ");
   return have.includes(needle);
 }
 
@@ -376,6 +434,8 @@ function gmailBodyHtml(text) {
 
 function insertReply(box, text) {
   const doc = box.ownerDocument || document;
+  const quotes = [...box.querySelectorAll(".gmail_quote, .gmail_quote_container")];
+  quotes.forEach((el) => el.remove());
   selectEditor(box);
   doc.execCommand("selectAll", false, null);
   const inserted = doc.execCommand("insertText", false, text);
@@ -410,6 +470,7 @@ function insertReply(box, text) {
         box.appendChild(doc.createTextNode(line));
       });
   }
+  quotes.forEach((el) => box.appendChild(el));
   box.dispatchEvent(
     new InputEvent("input", { bubbles: true, cancelable: true, inputType: "insertFromPaste", data: text })
   );
@@ -752,7 +813,7 @@ async function runDraft(redraft, extras) {
   } else if (box) {
     placed = await fillComposeReliable(box, text);
   }
-  if (!placed && savedId && savedId !== gmailDraftId) {
+  if (!placed && savedId && normalizeGmailDraftId(savedId) !== normalizeGmailDraftId(gmailDraftId)) {
     openGmailDraft(savedId);
     await sleep(900);
     box = await ensureComposeBox(composeMode);

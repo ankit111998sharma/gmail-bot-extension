@@ -110,12 +110,40 @@ def strip_quoted_reply(text: str) -> str:
         stripped = line.strip()
         if re.match(r"^On .+wrote:\s*$", stripped, re.I):
             break
+        if re.match(r"^On .{10,140}$", stripped, re.I) and "wrote:" not in stripped.lower():
+            break
         if stripped.startswith(">"):
             continue
-        if stripped == "--":
+        if stripped in {"--", "---------- Forwarded message ----------"}:
+            break
+        if stripped.lower().startswith("begin forwarded message"):
             break
         kept.append(line)
     return "\n".join(kept).strip()
+
+
+def usable_existing_draft(existing: str, incoming: str = "") -> str:
+    """Keep the user's draft. Ignore quoted thread text and copies of the incoming email."""
+    cleaned = strip_quoted_reply(existing)
+    have = _norm(cleaned)
+    if not have:
+        return ""
+    incoming_n = _norm(incoming)
+    if incoming_n and (have in incoming_n or incoming_n in have):
+        return ""
+    if incoming_n:
+        incoming_words = [w for w in incoming_n.split() if len(w) > 3]
+        have_words = [w for w in have.split() if len(w) > 3]
+        if incoming_words:
+            incoming_hits = sum(1 for word in incoming_words if word in have)
+            extra = [w for w in have_words if w not in incoming_n]
+            if incoming_hits / len(incoming_words) >= 0.8 and len(extra) <= max(6, int(0.35 * max(len(have_words), 1))):
+                return ""
+        if have_words:
+            overlap = sum(1 for word in have_words if word in incoming_n)
+            if overlap / len(have_words) >= 0.7:
+                return ""
+    return cleaned
 
 
 def correct_grammar(text: str) -> str:

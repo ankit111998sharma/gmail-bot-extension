@@ -6,8 +6,8 @@ from datetime import datetime, timezone
 from typing import Any
 
 from gmail_bot.config import Settings, load_settings, normalize_email, same_email
-from gmail_bot.draft_engine import generate_reply, topic_hint
-from gmail_bot.gmail_adapter import GmailAdapter, GmailPort, reply_recipient
+from gmail_bot.draft_engine import generate_reply, topic_hint, usable_existing_draft
+from gmail_bot.gmail_adapter import GmailAdapter, GmailPort, normalize_gmail_draft_id, reply_recipient
 from gmail_bot.guardian import ProjectGuardian, is_retryable_draft_error
 from gmail_bot.llm import LlmPort, build_llm
 from gmail_bot.logging_setup import setup_logging
@@ -403,10 +403,10 @@ class InboxBot:
                 f"This Gmail tab is {page}, but the OAuth token is for {owner_email}. "
                 "Open that inbox or click Connect this Gmail so drafts are created on your behalf."
             )
-        draft_id_hint = (gmail_draft_id or "").strip()
+        draft_id_hint = normalize_gmail_draft_id(gmail_draft_id)
         live_to = (to or "").strip()
         live_subject = (subject or "").strip()
-        live_body = (existing_draft or "").strip()
+        live_body = usable_existing_draft(existing_draft)
         live_thread = (thread_id or "").strip()
         if draft_id_hint:
             getter = getattr(self.gmail, "get_draft", None)
@@ -420,7 +420,7 @@ class InboxBot:
                 live_to = live_to or str(meta.get("to") or "")
                 live_subject = live_subject or str(meta.get("subject") or "")
                 if not live_body:
-                    live_body = str(meta.get("text") or "")
+                    live_body = usable_existing_draft(str(meta.get("text") or ""))
         if not reply_recipient(
             ParsedMessage(
                 message_id="",
@@ -440,8 +440,8 @@ class InboxBot:
             thread_id=live_thread,
             sender=live_to,
             subject=live_subject or topic_hint(notes) or "(No Subject)",
-            body=live_body or notes,
-            snippet=short_snippet(live_body or notes),
+            body=notes,
+            snippet=short_snippet(notes or live_subject),
             to_header=live_to,
         )
         rules, fetch_notes = self._load_rules(rules_url, f"{message.subject}\n{topic_hint(message.subject)}")
@@ -497,8 +497,6 @@ class InboxBot:
         )
 
     def _reply_llm(self, notes: str, rules: list[str] | None) -> LlmPort:
-        if not ((notes or "").strip() or (rules or [])):
-            return self.llm
         if getattr(self.llm, "name", "") != "placeholder":
             return self.llm
         try:
@@ -630,10 +628,16 @@ class InboxBot:
             )
         existing = self.store.get_queue_item(message.message_id)
         live_id, gmail_draft_text = self._lookup_thread_draft(message.thread_id)
-        if not (existing_draft or "").strip():
-            existing_draft = gmail_draft_text or ((existing or {}).get("draft_preview") or "")
-        open_id = (gmail_draft_id or "").strip()
-        stored_id = str((existing or {}).get("draft_id") or "")
+        incoming = "" if standalone else message.body
+        existing_draft = usable_existing_draft(existing_draft, incoming)
+        if not existing_draft:
+            existing_draft = usable_existing_draft(
+                gmail_draft_text or ((existing or {}).get("draft_preview") or ""),
+                incoming,
+            )
+        open_id = normalize_gmail_draft_id(gmail_draft_id)
+        stored_id = normalize_gmail_draft_id(str((existing or {}).get("draft_id") or ""))
+        live_id = normalize_gmail_draft_id(live_id)
         draft_id_to_update = open_id or live_id or stored_id
         attempts = int(existing["attempts"]) + 1 if existing else 1
         self.store.upsert_queue(
@@ -734,7 +738,7 @@ class InboxBot:
         tried: set[str] = set()
 
         def try_update(candidate: str) -> str:
-            want = (candidate or "").strip()
+            want = normalize_gmail_draft_id(candidate)
             if not want or want in tried or not callable(updater):
                 return ""
             tried.add(want)

@@ -7,6 +7,7 @@ from email.message import EmailMessage
 from email.policy import SMTP
 from email.utils import formataddr
 from typing import Any, Protocol
+from urllib.parse import unquote
 
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
@@ -23,6 +24,20 @@ SCOPES = ["https://www.googleapis.com/auth/gmail.modify"]
 USER = "me"
 
 logger = logging.getLogger("gmail_bot")
+
+
+def normalize_gmail_draft_id(value: str) -> str:
+    """Turn Gmail's web compose id (#msg-a:r-123) into the API draft id (r-123)."""
+    raw = unquote(str(value or "")).strip()
+    if not raw:
+        return ""
+    raw = raw.split(",")[0].strip()
+    if ":" in raw:
+        raw = raw.rsplit(":", 1)[-1]
+    raw = raw.lstrip("#").strip()
+    if raw.lower() in {"new", "null", "undefined"}:
+        return ""
+    return raw
 
 
 class GmailPort(Protocol):
@@ -354,6 +369,7 @@ class GmailAdapter:
         from_name: str = "",
         standalone: bool = False,
     ) -> str:
+        draft_id = normalize_gmail_draft_id(draft_id)
         if not draft_id:
             return self.create_draft_reply(
                 message, reply_text, from_email=from_email, from_name=from_name, standalone=standalone
@@ -383,7 +399,7 @@ class GmailAdapter:
         return updated
 
     def get_draft(self, draft_id: str) -> dict[str, str]:
-        want = (draft_id or "").strip()
+        want = normalize_gmail_draft_id(draft_id)
         if not want:
             return {}
         full = self._call(self.service.users().drafts().get(userId=USER, id=want, format="full"))
@@ -446,6 +462,7 @@ class GmailAdapter:
         return ""
 
     def delete_draft(self, draft_id: str) -> None:
+        draft_id = normalize_gmail_draft_id(draft_id)
         if not draft_id:
             return
         request = self.service.users().drafts().delete(userId=USER, id=draft_id)

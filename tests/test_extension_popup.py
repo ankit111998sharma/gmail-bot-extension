@@ -34,3 +34,9 @@ def test_extension_popup_shows_optional_url_and_notes() -> None:
     assert "g_editable" in content
     assert "keepDraftVisible" in content
     assert "openGmailDraft" in content
+    assert "normalizeGmailDraftId" in content
+    assert "gmail_quote" in content
+    assert "stripQuotedText" in content
+    assert "composeBodyText" in content
+    assert "gmail-bot-mode-compose" in content
+    assert "1.5.2" in manifest

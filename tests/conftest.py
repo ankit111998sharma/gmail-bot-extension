@@ -146,22 +146,26 @@ class FakeGmail:
         from_name: str = "",
         standalone: bool = False,
     ) -> str:
-        from gmail_bot.gmail_adapter import reply_recipient
+        from gmail_bot.gmail_adapter import normalize_gmail_draft_id, reply_recipient
 
+        want = normalize_gmail_draft_id(draft_id)
         for row in self.drafts:
-            if row["id"] == draft_id:
+            if row["id"] == want:
                 row["text"] = reply_text
                 row["from"] = from_email
                 row["from_name"] = from_name
                 row["to"] = reply_recipient(message, from_email)
                 row["standalone"] = standalone
                 row["subject"] = message.subject
-                return draft_id
+                return want
         raise RuntimeError("Requested entity was not found.")
 
     def get_draft(self, draft_id: str) -> dict[str, str]:
+        from gmail_bot.gmail_adapter import normalize_gmail_draft_id
+
+        want = normalize_gmail_draft_id(draft_id)
         for row in self.drafts:
-            if row["id"] == draft_id:
+            if row["id"] == want:
                 return {
                     "id": str(row["id"]),
                     "thread_id": str(row.get("thread_id") or ""),

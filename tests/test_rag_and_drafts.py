@@ -6,6 +6,7 @@ from gmail_bot.draft_engine import (
     placeholder_reply,
     strip_quoted_reply,
     topic_hint,
+    usable_existing_draft,
 )
 from gmail_bot.llm import PlaceholderLlm
 from gmail_bot.models import RetrievedChunk, StyleExample
@@ -123,6 +124,21 @@ def test_correct_grammar_and_strip_quoted_thread() -> None:
     assert "I hope" in text
     assert "resolved" in text
     assert "Please confirm" in text
+
+
+def test_usable_existing_draft_ignores_incoming_and_quoted_thread() -> None:
+    incoming = "As discussed on call, I hope the issue has been resolved."
+    assert usable_existing_draft(incoming, incoming) == ""
+    quoted = "\n\nOn Mon, 20 Sep 2026 Rachana wrote:\n> As discussed on call\n"
+    assert usable_existing_draft(quoted, incoming) == ""
+    pasted = (
+        "Hi Asharma111998,\n\nAs discussed on call, I hope the issue has been resolved.\n\n"
+        "Thanks & regards,\nSupport Team"
+    )
+    assert usable_existing_draft(pasted, incoming) == ""
+    own = "hello please confirm the fee payment link"
+    assert "please confirm" in usable_existing_draft(own, incoming).lower()
+    assert usable_existing_draft(own, "") == "hello please confirm the fee payment link"
 
 
 def test_redraft_uses_rules_without_copying_incoming() -> None:

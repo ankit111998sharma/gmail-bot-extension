@@ -287,6 +287,52 @@ def test_click_modifies_existing_draft_in_place(settings: Settings, store) -> No
     assert gmail.send_called is False
 
 
+def test_click_updates_draft_when_gmail_sends_web_compose_id(settings: Settings, store) -> None:
+    message = make_message()
+    gmail = FakeGmail([message])
+    bot = InboxBot(settings=settings, store=store, gmail=gmail)
+    first = bot.draft_from_open_mail("Ada <ada@example.com>", "Office hours?", "what are hours?")
+    result = bot.draft_from_open_mail(
+        "Ada <ada@example.com>",
+        "Office hours?",
+        "what are hours?",
+        existing_draft="hello please confirm the office hours",
+        gmail_draft_id=f"#msg-a:{first['draft_id']}",
+    )
+    assert len(gmail.drafts) == 1
+    assert result["draft_id"] == first["draft_id"]
+    assert gmail.send_called is False
+
+
+def test_click_does_not_rewrite_incoming_email_as_the_draft(settings: Settings, store) -> None:
+    from gmail_bot.models import StyleExample
+
+    message = make_message(
+        sender="Rachana <esupport@kuk.ac.in>",
+        subject="Re: Request to Reopen Fee Payment Link",
+        body="As discussed on call, I hope the issue has been resolved.",
+    )
+    gmail = FakeGmail([message])
+    gmail.sent_examples = [
+        StyleExample(
+            subject="Request to Reopen Fee Payment Link",
+            body="Please reopen the fee payment link for the internship backlog.",
+        )
+    ]
+    bot = InboxBot(settings=settings, store=store, gmail=gmail)
+    result = bot.draft_from_open_mail(
+        "Rachana <esupport@kuk.ac.in>",
+        "Re: Request to Reopen Fee Payment Link",
+        "As discussed on call, I hope the issue has been resolved.",
+        existing_draft="As discussed on call, I hope the issue has been resolved.",
+    )
+    text = result["draftText"].lower()
+    assert "as discussed on call" not in text
+    assert "issue has been resolved" not in text
+    assert "fee payment" in text or "reopen" in text
+    assert gmail.send_called is False
+
+
 def test_click_updates_live_thread_draft_when_store_id_is_gone(settings: Settings, store) -> None:
     message = make_message()
     gmail = FakeGmail([message])
@@ -398,6 +444,22 @@ def test_compose_updates_open_gmail_draft_in_place(settings: Settings, store) ->
     assert len(gmail.drafts) == 1
     assert result["draft_id"] == first["draft_id"]
     assert "please confirm" in result["draftText"].lower() or "hours" in result["draftText"].lower()
+    assert gmail.send_called is False
+
+
+def test_compose_redrafts_typed_draft_without_notes(settings: Settings, store) -> None:
+    gmail = FakeGmail([])
+    bot = InboxBot(settings=settings, store=store, gmail=gmail)
+    result = bot.draft_compose_mail(
+        "Ada <ada@example.com>",
+        "Fee payment",
+        existing_draft="hello please reopen the fee payment link for the internship backlog",
+        gmail_draft_id="#msg-a:r-compose-1",
+    )
+    assert len(gmail.drafts) == 1
+    text = result["draftText"].lower()
+    assert "internship" in text or "reopen" in text
+    assert "as discussed on call" not in text
     assert gmail.send_called is False
 
 
