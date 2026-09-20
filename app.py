@@ -131,7 +131,7 @@ def render_home(bot) -> None:
     m1.metric("Drafts made", status.processed_count)
     m2.metric("Waiting", status.queue_pending)
     m3.metric("Failed", status.queue_failed)
-    st.caption(f"Last check: {status.last_poll or '—'} · {status.last_activity or 'No activity yet'}")
+    st.caption("On Gmail, click the blue bot icon to draft the open email. Keep this window running.")
 
     st.markdown("##### Recent activity")
     logs = bot.store.recent_job_logs(8)
@@ -236,6 +236,12 @@ def render_setup(bot) -> None:
 4. On **Home**, type the Gmail address and click **Connect this Gmail**
 5. Sign in as that same address. The bot only uses that inbox.
 6. This app only writes drafts. It never sends mail.
+
+**Gmail page button**
+
+1. Keep this app running (`run.bat`).
+2. Chrome → `chrome://extensions` → Developer mode → Load unpacked → select the `extension` folder in this project.
+3. Open Gmail, open an email, click the blue bot icon. A draft is created only when you click it.
         """
     )
 

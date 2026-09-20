@@ -30,6 +30,14 @@ def main() -> None:
     os.chdir(root)
     if str(root) not in sys.path:
         sys.path.insert(0, str(root))
+    from gmail_bot.config import load_settings
+    from gmail_bot.local_api import start_local_api
+
+    settings = load_settings(root)
+    api_port = unused_port(settings.local_api_port)
+    start_local_api(port=api_port)
+    os.environ["GMAIL_BOT_API_PORT"] = str(api_port)
+    print(f"Gmail click-to-draft API: http://127.0.0.1:{api_port}")
     port = unused_port(int(os.environ.get("STREAMLIT_SERVER_PORT", "8501")))
     app = root / "app.py"
     from streamlit.web import cli as stcli

@@ -47,6 +47,7 @@ class Settings:
     gmail_min_interval: float = 0.25
     assistant_name: str = "Gmail Bot"
     gmail_account: str = ""
+    local_api_port: int = 8787
 
     def ensure_dirs(self) -> None:
         self.credentials_path.parent.mkdir(parents=True, exist_ok=True)
@@ -97,6 +98,7 @@ def load_settings(project_root: Path | None = None) -> Settings:
         retrieve_k=_as_int(os.getenv("RETRIEVE_K"), 5),
         assistant_name=os.getenv("ASSISTANT_NAME", "Gmail Bot"),
         gmail_account=normalize_email(os.getenv("GMAIL_ACCOUNT", "")),
+        local_api_port=max(1024, _as_int(os.getenv("LOCAL_API_PORT"), 8787)),
     )
     settings.ensure_dirs()
     return settings

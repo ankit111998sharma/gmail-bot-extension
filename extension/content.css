@@ -1,0 +1,38 @@
+#gmail-bot-fab {
+  position: fixed;
+  right: 28px;
+  bottom: 28px;
+  z-index: 999999;
+  width: 56px;
+  height: 56px;
+  border: none;
+  border-radius: 50%;
+  background: #2563eb;
+  color: #fff;
+  font-size: 22px;
+  cursor: pointer;
+  box-shadow: 0 8px 24px rgba(37, 99, 235, 0.35);
+}
+
+#gmail-bot-fab:hover {
+  background: #1d4ed8;
+}
+
+#gmail-bot-fab:disabled {
+  opacity: 0.7;
+  cursor: wait;
+}
+
+#gmail-bot-toast {
+  position: fixed;
+  right: 28px;
+  bottom: 96px;
+  z-index: 999999;
+  max-width: 280px;
+  background: #111827;
+  color: #fff;
+  padding: 10px 12px;
+  border-radius: 10px;
+  font: 13px/1.4 Arial, sans-serif;
+  display: none;
+}

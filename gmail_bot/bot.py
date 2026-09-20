@@ -31,6 +31,13 @@ def matches_filters(message: ParsedMessage, settings: Settings) -> bool:
     return True
 
 
+def strip_reply_prefix(subject: str | None) -> str:
+    value = (subject or "").strip()
+    while value.lower().startswith("re:"):
+        value = value[3:].strip()
+    return value
+
+
 class InboxBot:
     def __init__(
         self,
@@ -210,6 +217,54 @@ class InboxBot:
                 drafted += 1
         self.last_activity = f"processed {drafted} draft(s) at {self.last_poll}"
         return drafted
+
+    def draft_from_open_mail(self, sender: str, subject: str, body: str = "") -> dict[str, str]:
+        """Create a draft for the Gmail message the user currently has open. Click-only."""
+        if not self.gmail.oauth_ready() and not getattr(self.gmail, "_service", None):
+            raise RuntimeError("Gmail is not connected. Keep this app running and click Connect this Gmail.")
+        self._assert_account()
+        self._refresh_style_examples()
+        message = self._find_open_message(sender, subject, body)
+        created = self._process_message(message.message_id)
+        if not created:
+            raise RuntimeError("This email did not match the saved sender/keyword filters.")
+        item = self.store.get_queue_item(message.message_id) or {}
+        self.last_activity = f"drafted open mail at {_utcnow()}"
+        return {
+            "draft_id": str(item.get("draft_id") or ""),
+            "message_id": message.message_id,
+            "subject": message.subject,
+            "sender": message.sender,
+        }
+
+    def _find_open_message(self, sender: str, subject: str, body: str = "") -> ParsedMessage:
+        email = normalize_email(sender)
+        want = strip_reply_prefix(subject).lower()
+        query = "in:inbox"
+        if email:
+            query += f" from:{email}"
+        if want:
+            query += f' subject:"{want.replace(chr(34), "")}"'
+        ids = []
+        lister = getattr(self.gmail, "list_message_ids", None)
+        if callable(lister):
+            ids = lister(query, 10)
+            if not ids and email:
+                ids = lister(f"in:inbox from:{email}", 10)
+        else:
+            ids = self.gmail.list_unread_ids(query)
+        if not ids:
+            raise RuntimeError("Could not find this email in the connected Gmail. Open the message and try again.")
+        for message_id in ids:
+            message = self.gmail.get_message(message_id)
+            have = strip_reply_prefix(message.subject).lower()
+            sender_blob = (message.sender or "").lower()
+            if email and email not in sender_blob:
+                continue
+            if want and want not in have and have not in want:
+                continue
+            return message
+        return self.gmail.get_message(ids[0])
 
     def _refresh_style_examples(self) -> None:
         if self._style_loaded:

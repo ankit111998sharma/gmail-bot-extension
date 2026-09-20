@@ -69,7 +69,27 @@ class FakeGmail:
         return self.profile_email
 
     def list_unread_ids(self, query: str) -> list[str]:
-        return list(self.messages.keys())
+        return self.list_message_ids(query, limit=500)
+
+    def list_message_ids(self, query: str, limit: int = 10) -> list[str]:
+        q = (query or "").lower()
+        ids: list[str] = []
+        for message in self.messages.values():
+            blob = f"{message.sender} {message.subject} {message.body}".lower()
+            if "from:" in q:
+                addr = (message.sender or "").lower()
+                token = q.split("from:", 1)[1].split()[0].strip("\"'")
+                if token and token not in addr:
+                    continue
+            if "subject:" in q:
+                subject = (message.subject or "").lower()
+                token = q.split("subject:", 1)[1].strip().strip("\"'")
+                if token and token not in subject and subject not in token:
+                    continue
+            ids.append(message.message_id)
+            if len(ids) >= limit:
+                break
+        return ids
 
     def get_message(self, message_id: str) -> ParsedMessage:
         return self.messages[message_id]

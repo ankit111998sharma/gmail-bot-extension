@@ -2,11 +2,12 @@
 
 Standalone local app that reads Gmail, drafts replies in your thread, and **never sends** mail. Copy this folder to another computer and it keeps working (venv is created by `run.bat` / `run.sh`).
 
-This is **not** a Chrome extension and is **not** part of any other project.
+A small Chrome helper can show a bot icon on the Gmail page. Drafts are created **only when you click that icon**.
 
 ## What it does
 
-- Polls unread inbox mail on a Start / Pause / Stop toggle
+- Optional Start / Pause / Stop polling of unread inbox mail
+- Bot icon on Gmail: click it to draft a reply for the open email only
 - Builds a local knowledge index from `data/knowledge/faqs.json`, markdown notes, and optional website URLs
 - Optionally matches tone using recent **Sent** mail as few-shot examples
 - Writes a Gmail **draft** in the same thread (`threadId` + `In-Reply-To` / `References`)
@@ -30,6 +31,18 @@ chmod +x run.sh
 ```
 
 Then open the URL Streamlit prints (usually http://127.0.0.1:8501).
+
+## Gmail page button (click to draft)
+
+Keep `run.bat` running, then load the helper in Chrome:
+
+1. Open `chrome://extensions`
+2. Turn on **Developer mode**
+3. Click **Load unpacked**
+4. Select `d:\Cursor ai projects\gmail bot extension\extension`
+5. Open [Gmail](https://mail.google.com/mail/u/0/#inbox), open an email, click the blue bot icon at the bottom right
+
+The bot does not draft until you click that icon. Review the draft in Gmail; it never sends.
 
 ## One-time Gmail setup (you must do this)
 
