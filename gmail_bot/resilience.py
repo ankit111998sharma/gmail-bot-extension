@@ -34,6 +34,17 @@ def backoff_seconds(attempt: int, *, base: float = 1.0, cap: float = 60.0, jitte
     return delay
 
 
+def is_retryable_error(exc: BaseException) -> bool:
+    resp = getattr(exc, "resp", None)
+    try:
+        status = int(getattr(resp, "status", 0) or 0)
+    except (TypeError, ValueError):
+        status = 0
+    if status:
+        return status == 429 or status >= 500
+    return True
+
+
 def retry_call(
     fn: Callable[[], T],
     *,
@@ -42,6 +53,7 @@ def retry_call(
     cap: float = 30.0,
     retry_on: tuple[type[BaseException], ...] = (Exception,),
     sleeper: Callable[[float], None] = time.sleep,
+    should_retry: Callable[[BaseException], bool] | None = None,
 ) -> T:
     last_error: BaseException | None = None
     for i in range(attempts):
@@ -49,6 +61,8 @@ def retry_call(
             return fn()
         except retry_on as exc:
             last_error = exc
+            if should_retry is not None and not should_retry(exc):
+                raise
             if i >= attempts - 1:
                 break
             sleeper(backoff_seconds(i, base=base, cap=cap))

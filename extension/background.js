@@ -72,20 +72,46 @@ async function findGmailTab() {
   return tabs.find((tab) => tab.active) || tabs[0] || null;
 }
 
+async function sendTabMessage(tabId, message) {
+  try {
+    return await chrome.tabs.sendMessage(tabId, message);
+  } catch (error) {
+    return { ok: false, error: error.message || String(error) };
+  }
+}
+
+async function ensureGmailContent(tabId) {
+  const ping = await sendTabMessage(tabId, { action: "ping" });
+  if (ping && ping.ok) {
+    return true;
+  }
+  if (!chrome.scripting) {
+    return false;
+  }
+  await chrome.scripting.executeScript({ target: { tabId }, files: ["content.js"] });
+  try {
+    await chrome.scripting.insertCSS({ target: { tabId }, files: ["content.css"] });
+  } catch (_error) {
+    /* CSS insert is optional if the content script already loaded styles. */
+  }
+  const again = await sendTabMessage(tabId, { action: "ping" });
+  return Boolean(again && again.ok);
+}
+
 async function draftFromPopup(request) {
   const tab = await findGmailTab();
   if (!tab) {
     return { ok: false, error: "Open Gmail in Chrome first, then use this extension." };
   }
-  try {
-    const response = await chrome.tabs.sendMessage(tab.id, {
-      action: "runDraft",
-      redraft: Boolean(request.redraft),
-      rulesUrl: request.rulesUrl || "",
-      notes: request.notes || "",
-    });
-    return response || { ok: false, error: "Refresh the Gmail tab, then try again." };
-  } catch (_error) {
+  const ready = await ensureGmailContent(tab.id);
+  if (!ready) {
     return { ok: false, error: "Refresh the Gmail tab, then try again." };
   }
+  const response = await sendTabMessage(tab.id, {
+    action: "runDraft",
+    redraft: Boolean(request.redraft),
+    rulesUrl: request.rulesUrl || "",
+    notes: request.notes || "",
+  });
+  return response || { ok: false, error: "Refresh the Gmail tab, then try again." };
 }

@@ -15,7 +15,7 @@ from googleapiclient.errors import HttpError
 from gmail_bot.config import Settings, normalize_email, same_email
 from gmail_bot.language import detect_language
 from gmail_bot.models import ParsedMessage, StyleExample, short_snippet
-from gmail_bot.resilience import RateLimiter, retry_call
+from gmail_bot.resilience import RateLimiter, retry_call, is_retryable_error
 
 SCOPES = ["https://www.googleapis.com/auth/gmail.modify"]
 USER = "me"
@@ -221,7 +221,14 @@ class GmailAdapter:
             return fn.execute()
 
         try:
-            return retry_call(_execute, attempts=4, base=1.0, cap=20.0, retry_on=(HttpError, OSError, ConnectionError))
+            return retry_call(
+                _execute,
+                attempts=4,
+                base=1.0,
+                cap=20.0,
+                retry_on=(HttpError, OSError, ConnectionError),
+                should_retry=is_retryable_error,
+            )
         except HttpError:
             raise
 
@@ -277,7 +284,24 @@ class GmailAdapter:
         self._call(request)
 
     def apply_label(self, message_id: str, label_name: str) -> None:
-        label_id = self._ensure_label(label_name)
+        name = (label_name or "").strip()
+        if not message_id or not name:
+            return
+        try:
+            self._apply_label_once(message_id, name)
+            return
+        except HttpError as exc:
+            logger.warning("Gmail label failed once: %s", exc, extra={"event": "label_apply_retry"})
+            self._label_ids.pop(name, None)
+        try:
+            self._apply_label_once(message_id, name)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Could not apply Gmail label: %s", exc, extra={"event": "label_apply_failed"})
+
+    def _apply_label_once(self, message_id: str, label_name: str) -> None:
+        label_id = self._ensure_label(label_name, force=True)
+        if not label_id:
+            return
         request = self.service.users().messages().modify(
             userId=USER,
             id=message_id,
@@ -328,24 +352,44 @@ class GmailAdapter:
                 break
         return examples
 
-    def _ensure_label(self, name: str) -> str:
-        if name in self._label_ids:
-            return self._label_ids[name]
+    def _ensure_label(self, name: str, *, force: bool = False) -> str:
+        want = (name or "").strip()
+        if not want:
+            return ""
+        if not force and want in self._label_ids:
+            return self._label_ids[want]
         request = self.service.users().labels().list(userId=USER)
         result = self._call(request)
-        for label in result.get("labels") or []:
-            if label.get("name") == name:
-                self._label_ids[name] = label["id"]
-                return label["id"]
-        created = self._call(
-            self.service.users().labels().create(
-                userId=USER,
-                body={
-                    "name": name,
-                    "labelListVisibility": "labelShow",
-                    "messageListVisibility": "show",
-                },
+        found = self._find_label_id(result.get("labels") or [], want)
+        if found:
+            self._label_ids[want] = found
+            return found
+        try:
+            created = self._call(
+                self.service.users().labels().create(
+                    userId=USER,
+                    body={
+                        "name": want,
+                        "labelListVisibility": "labelShow",
+                        "messageListVisibility": "show",
+                    },
+                )
             )
-        )
-        self._label_ids[name] = created["id"]
-        return created["id"]
+        except HttpError:
+            relisted = self._call(self.service.users().labels().list(userId=USER))
+            found = self._find_label_id(relisted.get("labels") or [], want)
+            if found:
+                self._label_ids[want] = found
+                return found
+            raise
+        label_id = str(created.get("id") or "")
+        if label_id:
+            self._label_ids[want] = label_id
+        return label_id
+
+    def _find_label_id(self, labels: list[dict[str, Any]], name: str) -> str:
+        want = name.strip().lower()
+        for label in labels:
+            if (label.get("name") or "").strip().lower() == want:
+                return str(label.get("id") or "")
+        return ""

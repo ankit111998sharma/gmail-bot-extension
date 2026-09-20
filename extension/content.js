@@ -1,3 +1,9 @@
+(function bootGmailDraftBot() {
+if (window.__gmailDraftBotLoaded) {
+  return;
+}
+window.__gmailDraftBotLoaded = true;
+
 function normalizeEmail(value) {
   const match = String(value || "")
     .toLowerCase()
@@ -54,7 +60,8 @@ function isVisible(el) {
   if (!el || !el.getClientRects().length) {
     return false;
   }
-  const style = window.getComputedStyle(el);
+  const view = el.ownerDocument?.defaultView || window;
+  const style = view.getComputedStyle(el);
   return style.visibility !== "hidden" && style.display !== "none";
 }
 
@@ -81,16 +88,38 @@ function isComposeEditor(el) {
   );
 }
 
-function findComposeBox() {
+function findComposeInDocument(doc) {
+  if (!doc) {
+    return null;
+  }
   const nodes = [
-    ...document.querySelectorAll('div.Am.Al.editable[contenteditable="true"]'),
-    ...document.querySelectorAll('div.LW-avf[contenteditable="true"]'),
-    ...document.querySelectorAll('div[aria-label="Message Body"][contenteditable="true"]'),
-    ...document.querySelectorAll('div[aria-label="Compose body"][contenteditable="true"]'),
-    ...document.querySelectorAll('div[role="textbox"][contenteditable="true"]'),
+    ...doc.querySelectorAll('div.Am.Al.editable[contenteditable="true"]'),
+    ...doc.querySelectorAll('div.LW-avf[contenteditable="true"]'),
+    ...doc.querySelectorAll('div[aria-label="Message Body"][contenteditable="true"]'),
+    ...doc.querySelectorAll('div[aria-label="Compose body"][contenteditable="true"]'),
+    ...doc.querySelectorAll('div[role="textbox"][contenteditable="true"]'),
   ];
   const matches = nodes.filter(isComposeEditor);
   return matches[matches.length - 1] || null;
+}
+
+function findComposeBox() {
+  const top = findComposeInDocument(document);
+  if (top) {
+    return top;
+  }
+  const frames = [...document.querySelectorAll("iframe")];
+  for (const frame of frames) {
+    try {
+      const inner = findComposeInDocument(frame.contentDocument);
+      if (inner) {
+        return inner;
+      }
+    } catch (_error) {
+      /* Cross-origin frames are skipped. */
+    }
+  }
+  return null;
 }
 
 function readComposeText() {
@@ -101,9 +130,12 @@ function readComposeText() {
 function clickReply() {
   const replies = [
     ...document.querySelectorAll('div[aria-label="Reply"]'),
+    ...document.querySelectorAll('span[role="link"][data-tooltip="Reply"]'),
     ...document.querySelectorAll('span[data-tooltip="Reply"]'),
     ...document.querySelectorAll('div[data-tooltip="Reply"]'),
     ...document.querySelectorAll('[aria-label^="Reply"]'),
+    ...document.querySelectorAll('div.ams.bkH'),
+    ...document.querySelectorAll("span.ams.bkH"),
   ];
   const unique = [...new Set(replies)];
   const btn = unique[unique.length - 1] || unique[0];
@@ -156,20 +188,23 @@ function escapeHtml(text) {
 
 function selectEditor(box) {
   box.focus();
-  const selection = window.getSelection();
-  const range = document.createRange();
+  const doc = box.ownerDocument || document;
+  const view = doc.defaultView || window;
+  const selection = view.getSelection();
+  const range = doc.createRange();
   range.selectNodeContents(box);
   selection.removeAllRanges();
   selection.addRange(range);
 }
 
 function insertReply(box, text) {
+  const doc = box.ownerDocument || document;
   selectEditor(box);
-  document.execCommand("selectAll", false, null);
-  const inserted = document.execCommand("insertText", false, text);
+  doc.execCommand("selectAll", false, null);
+  const inserted = doc.execCommand("insertText", false, text);
   if (!inserted || !hasDraftText(box, text)) {
     selectEditor(box);
-    document.execCommand("insertHTML", false, escapeHtml(text).replace(/\n/g, "<br>"));
+    doc.execCommand("insertHTML", false, escapeHtml(text).replace(/\n/g, "<br>"));
   }
   if (!hasDraftText(box, text)) {
     try {
@@ -380,11 +415,6 @@ async function runDraft(redraft, extras) {
     return { ok: false, error };
   }
   const existing = readComposeText();
-  if (redraft && !existing) {
-    const error = "Open the reply box with a draft first, then click Redraft.";
-    toast(error);
-    return { ok: false, error };
-  }
   const rulesUrl = (
     extras && extras.rulesUrl != null
       ? extras.rulesUrl
@@ -397,9 +427,7 @@ async function runDraft(redraft, extras) {
   ).trim();
   setBusy(true);
   toast(redraft ? "Fixing grammar and redrafting…" : "Writing your reply…");
-  if (!redraft) {
-    ensureComposeBox();
-  }
+  ensureComposeBox();
   const response = await sendRuntime({
     action: "draftOpen",
     payload: {
@@ -434,6 +462,10 @@ async function runDraft(redraft, extras) {
 }
 
 chrome.runtime.onMessage.addListener((request, _sender, sendResponse) => {
+  if (request.action === "ping") {
+    sendResponse({ ok: true });
+    return;
+  }
   if (request.action !== "runDraft") {
     return;
   }
@@ -452,3 +484,4 @@ setInterval(() => {
   ensurePanel();
   ensureButton();
 }, 2000);
+})();

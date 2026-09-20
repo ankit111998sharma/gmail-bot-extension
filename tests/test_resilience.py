@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import time
 
-from gmail_bot.resilience import RateLimiter, backoff_seconds, retry_call
+from gmail_bot.resilience import RateLimiter, backoff_seconds, retry_call, is_retryable_error
 
 
 def test_backoff_doubles_without_jitter() -> None:
@@ -23,6 +23,32 @@ def test_retry_call_retries_then_succeeds() -> None:
 
     assert retry_call(flaky, attempts=4, base=0.01, cap=0.05, retry_on=(ConnectionError,), sleeper=lambda _: None) == "ok"
     assert state["n"] == 3
+
+
+def test_retry_call_does_not_retry_http_400() -> None:
+    state = {"n": 0}
+
+    class Boom(Exception):
+        def __init__(self) -> None:
+            super().__init__("bad request")
+            self.resp = type("Resp", (), {"status": 400})()
+
+    def flaky() -> str:
+        state["n"] += 1
+        raise Boom()
+
+    try:
+        retry_call(
+            flaky,
+            attempts=4,
+            retry_on=(Boom,),
+            sleeper=lambda _: None,
+            should_retry=is_retryable_error,
+        )
+        raise AssertionError("expected HTTP 400 to raise immediately")
+    except Boom:
+        pass
+    assert state["n"] == 1
 
 
 def test_rate_limiter_enforces_interval() -> None:

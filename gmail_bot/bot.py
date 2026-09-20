@@ -271,6 +271,10 @@ class InboxBot:
         self._assert_account()
         self._refresh_style_examples()
         found = self._find_open_message(sender, subject, body)
+        if not (existing_draft or "").strip():
+            queued = self.store.get_queue_item(found.message_id)
+            if queued:
+                existing_draft = queued.get("draft_preview") or existing_draft
         _, owner_email = self._owner_identity()
         reply_sender = found.sender
         if same_email(reply_sender, owner_email) or same_email(sender, owner_email):
@@ -485,7 +489,10 @@ class InboxBot:
             notes=notes,
         )
         draft_id = self.gmail.create_draft_reply(message, draft.text, from_email=owner_email)
-        self.gmail.apply_label(message.message_id, self.settings.label_name)
+        try:
+            self.gmail.apply_label(message.message_id, self.settings.label_name)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Could not label drafted mail: %s", exc, extra={"event": "label_apply_failed"})
         self.store.mark_processed(message.message_id, message.thread_id, draft_id)
         self.store.upsert_queue(
             {

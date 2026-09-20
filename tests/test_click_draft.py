@@ -231,3 +231,35 @@ def test_optional_notes_shape_the_draft(settings: Settings, store, monkeypatch) 
     assert "fee payment" in text
     assert "as discussed on call" not in text
     assert gmail.send_called is False
+
+
+def test_label_failure_does_not_block_click_draft(settings: Settings, store) -> None:
+    class BoomGmail(FakeGmail):
+        def apply_label(self, message_id: str, label_name: str) -> None:
+            raise RuntimeError("labelId not found")
+
+    message = make_message()
+    gmail = BoomGmail([message])
+    bot = InboxBot(settings=settings, store=store, gmail=gmail)
+    result = bot.draft_from_open_mail("Ada <ada@example.com>", "Office hours?", "what are hours?")
+    assert result["draftText"]
+    assert len(gmail.drafts) == 1
+    assert gmail.send_called is False
+
+
+def test_redraft_uses_saved_preview_when_compose_empty(settings: Settings, store) -> None:
+    message = make_message()
+    gmail = FakeGmail([message])
+    bot = InboxBot(settings=settings, store=store, gmail=gmail)
+    first = bot.draft_from_open_mail("Ada <ada@example.com>", "Office hours?", "hours?")
+    result = bot.draft_from_open_mail(
+        "Ada <ada@example.com>",
+        "Office hours?",
+        "hours?",
+        existing_draft="",
+        notes="Please mention support hours are 9 AM to 6 PM.",
+    )
+    text = result["draftText"].lower()
+    assert result["draft_id"] != first["draft_id"] or len(gmail.drafts) == 1
+    assert "9" in text or "support" in text or "please mention" in text
+    assert gmail.send_called is False
