@@ -185,9 +185,35 @@ _SIGNOFF = re.compile(
 )
 
 
+_SOURCE_MARKERS = (
+    "function bootGmailDraftBot",
+    "window.__gmailDraftBotLoaded",
+    "function normalizeEmail",
+    "gmail-bot-fab",
+    "gmail-bot-mode-compose",
+)
+
+
+def is_junk_draft_text(text: str) -> bool:
+    """True for line-number dumps or extension source accidentally read as the draft."""
+    raw = text or ""
+    if any(marker in raw for marker in _SOURCE_MARKERS):
+        return True
+    lines = [line.strip() for line in raw.replace("\r\n", "\n").split("\n") if line.strip()]
+    if len(lines) < 20:
+        return False
+    sample = lines[:80]
+    numeric = sum(1 for line in sample if line.isdigit())
+    return numeric / len(sample) >= 0.7
+
+
 def usable_existing_draft(existing: str, incoming: str = "") -> str:
     """Keep the user's draft. Ignore quoted thread text and copies of the incoming email."""
+    if is_junk_draft_text(existing):
+        return ""
     cleaned = strip_quoted_reply(existing)
+    if is_junk_draft_text(cleaned):
+        return ""
     have = _norm(cleaned)
     if not have:
         return ""
@@ -535,6 +561,8 @@ def generate_reply(
     rules = rules or []
     notes = (notes or "").strip()
     existing_draft = strip_quoted_reply(existing_draft)
+    if is_junk_draft_text(existing_draft):
+        existing_draft = ""
     language = detect_language(existing_draft or notes or message.body or message.subject)
     answers = useful_answers(message, chunks)
     missing = not answers and not rules and not notes

@@ -154,12 +154,10 @@ function isComposeEditor(el) {
   }
   return Boolean(
     gmailEditable ||
-      el.classList.contains("editable") ||
+      (el.classList.contains("editable") && (el.classList.contains("Am") || el.classList.contains("Al"))) ||
       el.classList.contains("LW-avf") ||
-      el.classList.contains("Am") ||
       label.includes("message body") ||
-      label.includes("compose") ||
-      el.closest(".M9, .aoI, .ip, .gA, .aO7, [aria-label='Reply'], [role='dialog']")
+      label.includes("compose body")
   );
 }
 
@@ -252,8 +250,23 @@ function composeBodyText(box) {
   return stripQuotedText(copy.innerText || copy.textContent || "");
 }
 
+function isJunkComposeText(text) {
+  const raw = String(text || "");
+  if (/bootGmailDraftBot|__gmailDraftBotLoaded|gmail-bot-fab|function normalizeEmail/.test(raw)) {
+    return true;
+  }
+  const lines = raw.split(/\n/).map((line) => line.trim()).filter(Boolean);
+  if (lines.length < 20) {
+    return false;
+  }
+  const sample = lines.slice(0, 80);
+  const numeric = sample.filter((line) => /^\d+$/.test(line)).length;
+  return numeric / sample.length >= 0.7;
+}
+
 function readComposeText() {
-  return composeBodyText(findComposeBox());
+  const text = composeBodyText(findComposeBox());
+  return isJunkComposeText(text) ? "" : text;
 }
 
 function clickCompose() {
@@ -994,13 +1007,15 @@ async function runDraft(redraft, extras) {
   }
   rememberDraftId(findComposeBox() || box, savedId);
   placed = (await keepDraftVisible(text)) || placed;
-  toast(
-    placed
-      ? composeMode
+  if (placed) {
+    toast(
+      composeMode
         ? "New mail draft is in your Gmail compose box. No need to refresh."
         : "Reply draft is in the reply box. No need to refresh."
-      : "Draft is ready in the bot card. Open the Gmail draft if the box is hidden."
-  );
+    );
+  } else {
+    toast("Draft is ready in the bot card. Open the Gmail draft if the box is hidden.");
+  }
   return { ok: true, placed, draftText: text, suggestions: response.suggestions };
 }
 

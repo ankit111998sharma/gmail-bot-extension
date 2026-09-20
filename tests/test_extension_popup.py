@@ -51,4 +51,5 @@ def test_extension_popup_shows_optional_url_and_notes() -> None:
     assert "isNewComposeWindow" in content
     assert "rememberDraftId" in content
     assert "cllg" in content.lower()
-    assert "1.5.5" in manifest
+    assert "isJunkComposeText" in content
+    assert "1.5.6" in manifest

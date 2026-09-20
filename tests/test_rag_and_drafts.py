@@ -188,6 +188,25 @@ def test_usable_existing_draft_ignores_incoming_and_quoted_thread() -> None:
     assert usable_existing_draft(own, "") == "hello please confirm the fee payment link"
 
 
+def test_usable_existing_draft_ignores_source_and_line_numbers() -> None:
+    numbers = "\n".join(str(i) for i in range(1, 40))
+    assert usable_existing_draft(numbers) == ""
+    source = "(function bootGmailDraftBot() {\nwindow.__gmailDraftBotLoaded = true;\nfunction normalizeEmail(value) {}\n})();"
+    assert usable_existing_draft(source) == ""
+    drafted = generate_reply(
+        make_message(subject="Fee payment", body="Please reopen the fee payment link."),
+        [],
+        [],
+        PlaceholderLlm(),
+        assistant_name="Ankit",
+        owner_email="me@gmail.com",
+        existing_draft=numbers + "\n" + source,
+    )
+    assert "bootGmailDraftBot" not in drafted.text
+    assert "__gmailDraftBotLoaded" not in drafted.text
+    assert "fee payment" in drafted.text.lower() or "reopen" in drafted.text.lower()
+
+
 def test_redraft_uses_rules_without_copying_incoming() -> None:
     message = make_message(
         sender="Rachana Shrotri <esupport@kuk.ac.in>",
