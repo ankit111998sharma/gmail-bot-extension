@@ -7,6 +7,12 @@ chrome.runtime.onMessage.addListener((request, _sender, sendResponse) => {
       .catch((error) => sendResponse({ ok: false, error: error.message || String(error) }));
     return true;
   }
+  if (request.action === "draftFromPopup") {
+    draftFromPopup(request)
+      .then(sendResponse)
+      .catch((error) => sendResponse({ ok: false, error: error.message || String(error) }));
+    return true;
+  }
   if (request.action !== "draftOpen") {
     return;
   }
@@ -55,4 +61,31 @@ async function draftOpen(payload) {
     }
   }
   throw new Error(lastError);
+}
+
+async function findGmailTab() {
+  const [active] = await chrome.tabs.query({ active: true, currentWindow: true });
+  if (active && /mail\.google\.com/i.test(active.url || "")) {
+    return active;
+  }
+  const tabs = await chrome.tabs.query({ url: ["https://mail.google.com/*"] });
+  return tabs.find((tab) => tab.active) || tabs[0] || null;
+}
+
+async function draftFromPopup(request) {
+  const tab = await findGmailTab();
+  if (!tab) {
+    return { ok: false, error: "Open Gmail in Chrome first, then use this extension." };
+  }
+  try {
+    const response = await chrome.tabs.sendMessage(tab.id, {
+      action: "runDraft",
+      redraft: Boolean(request.redraft),
+      rulesUrl: request.rulesUrl || "",
+      notes: request.notes || "",
+    });
+    return response || { ok: false, error: "Refresh the Gmail tab, then try again." };
+  } catch (_error) {
+    return { ok: false, error: "Refresh the Gmail tab, then try again." };
+  }
 }

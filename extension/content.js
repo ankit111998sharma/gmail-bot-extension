@@ -330,16 +330,20 @@ function ensureButton() {
   document.body.appendChild(btn);
 }
 
-function fetchHealth() {
+function sendRuntime(message) {
   return new Promise((resolve) => {
-    chrome.runtime.sendMessage({ action: "health" }, (response) => {
+    chrome.runtime.sendMessage(message, (response) => {
       if (chrome.runtime.lastError) {
-        resolve({});
+        resolve({ ok: false, error: chrome.runtime.lastError.message });
         return;
       }
       resolve(response || {});
     });
   });
+}
+
+function fetchHealth() {
+  return sendRuntime({ action: "health" });
 }
 
 function setBusy(busy) {
@@ -351,55 +355,96 @@ function setBusy(busy) {
   });
 }
 
-async function runDraft(redraft) {
+function applyOptionalFields(extras) {
+  if (!extras) {
+    return;
+  }
+  ensurePanel();
+  const urlEl = document.getElementById("gmail-bot-url");
+  const notesEl = document.getElementById("gmail-bot-notes");
+  if (urlEl && extras.rulesUrl != null) {
+    urlEl.value = extras.rulesUrl;
+  }
+  if (notesEl && extras.notes != null) {
+    notesEl.value = extras.notes;
+  }
+}
+
+async function runDraft(redraft, extras) {
+  applyOptionalFields(extras);
   const health = await fetchHealth();
   const email = readOpenEmail(health.connected_email || health.target_email || "");
   if (!email.subject && !email.sender) {
-    toast("Open an email first, then draft or redraft.");
-    return;
+    const error = "Open an email first, then draft or redraft.";
+    toast(error);
+    return { ok: false, error };
   }
   const existing = readComposeText();
   if (redraft && !existing) {
-    toast("Open the reply box with a draft first, then click Redraft.");
-    return;
+    const error = "Open the reply box with a draft first, then click Redraft.";
+    toast(error);
+    return { ok: false, error };
   }
+  const rulesUrl = (
+    extras && extras.rulesUrl != null
+      ? extras.rulesUrl
+      : document.getElementById("gmail-bot-url")?.value || ""
+  ).trim();
+  const notes = (
+    extras && extras.notes != null
+      ? extras.notes
+      : document.getElementById("gmail-bot-notes")?.value || ""
+  ).trim();
   setBusy(true);
   toast(redraft ? "Fixing grammar and redrafting…" : "Writing your reply…");
   if (!redraft) {
     ensureComposeBox();
   }
-  const payload = {
-    ...email,
-    existingDraft: redraft ? existing : "",
-    rulesUrl: (document.getElementById("gmail-bot-url")?.value || "").trim(),
-    notes: (document.getElementById("gmail-bot-notes")?.value || "").trim(),
-  };
-  chrome.runtime.sendMessage({ action: "draftOpen", payload }, async (response) => {
-    setBusy(false);
-    if (chrome.runtime.lastError) {
-      toast(chrome.runtime.lastError.message);
-      return;
-    }
-    if (!(response && response.ok && (response.draftText || response.text))) {
-      toast((response && response.error) || "Could not create a draft.");
-      return;
-    }
-    const text = response.draftText || response.text;
-    showDraftPreview(text);
-    showSuggestions(response.suggestions);
-    const box = await ensureComposeBox();
-    if (!box) {
-      toast("Draft is ready in the bot card. Click Reply if you also want it in Gmail's box.");
-      return;
-    }
-    const placed = await fillComposeReliable(box, text);
-    toast(
-      placed
-        ? "Draft is in the reply box. No need to refresh."
-        : "Draft is ready in the bot card. Click the reply box and try Redraft if Gmail hid it."
-    );
+  const response = await sendRuntime({
+    action: "draftOpen",
+    payload: {
+      ...email,
+      existingDraft: redraft ? existing : "",
+      rulesUrl,
+      notes,
+    },
   });
+  setBusy(false);
+  if (!(response && response.ok && (response.draftText || response.text))) {
+    const error = (response && response.error) || "Could not create a draft.";
+    toast(error);
+    return { ok: false, error };
+  }
+  const text = response.draftText || response.text;
+  showDraftPreview(text);
+  showSuggestions(response.suggestions);
+  const box = await ensureComposeBox();
+  if (!box) {
+    const message = "Draft is ready in the bot card. Click Reply if you also want it in Gmail's box.";
+    toast(message);
+    return { ok: true, placed: false, draftText: text, suggestions: response.suggestions };
+  }
+  const placed = await fillComposeReliable(box, text);
+  toast(
+    placed
+      ? "Draft is in the reply box. No need to refresh."
+      : "Draft is ready in the bot card. Click the reply box and try Redraft if Gmail hid it."
+  );
+  return { ok: true, placed, draftText: text, suggestions: response.suggestions };
 }
+
+chrome.runtime.onMessage.addListener((request, _sender, sendResponse) => {
+  if (request.action !== "runDraft") {
+    return;
+  }
+  runDraft(Boolean(request.redraft), {
+    rulesUrl: request.rulesUrl || "",
+    notes: request.notes || "",
+  })
+    .then(sendResponse)
+    .catch((error) => sendResponse({ ok: false, error: error.message || String(error) }));
+  return true;
+});
 
 ensurePanel();
 ensureButton();

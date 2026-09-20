@@ -150,7 +150,7 @@ def render_home(bot) -> None:
     m1.metric("Drafts made", status.processed_count)
     m2.metric("Waiting", status.queue_pending)
     m3.metric("Failed", status.queue_failed)
-    st.caption("On Gmail, click the bot icon for optional website URL and notes, then draft. Keep this window running.")
+    st.caption("On Gmail, click the Chrome extension icon for optional website URL and notes, then draft. Keep this window running.")
 
     st.markdown("##### Recent activity")
     logs = bot.store.recent_job_logs(8)
@@ -272,11 +272,11 @@ def render_setup(bot) -> None:
 5. Sign in as that same address. The bot only uses that inbox.
 6. This app only writes drafts. It never sends mail.
 
-**Gmail page button**
+**Chrome extension**
 
 1. Keep this app running (`run.bat`).
 2. Chrome → `chrome://extensions` → Developer mode → Load unpacked → select the `extension` folder in this project.
-3. Open Gmail, click the blue bot icon, optionally paste a website URL and/or a description, then click **Draft reply**. Leave both blank to skip them. Use **Redraft & grammar** to correct an existing draft.
+3. Pin **Gmail Draft Bot**, open Gmail, then click the extension icon. Optional website URL and description appear there. Leave both blank to skip them. Use **Draft reply** or **Redraft & grammar**.
         """
     )
 
