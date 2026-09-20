@@ -50,13 +50,47 @@ function toast(text) {
   }, 5000);
 }
 
+function isVisible(el) {
+  if (!el || !el.getClientRects().length) {
+    return false;
+  }
+  const style = window.getComputedStyle(el);
+  return style.visibility !== "hidden" && style.display !== "none";
+}
+
+function isComposeEditor(el) {
+  if (!el || el.getAttribute("contenteditable") !== "true") {
+    return false;
+  }
+  if (!isVisible(el)) {
+    return false;
+  }
+  if (el.closest("form")?.getAttribute("role") === "search") {
+    return false;
+  }
+  const label = (el.getAttribute("aria-label") || "").toLowerCase();
+  if (label.includes("search")) {
+    return false;
+  }
+  return Boolean(
+    el.classList.contains("editable") ||
+      el.classList.contains("LW-avf") ||
+      label.includes("message body") ||
+      label.includes("compose") ||
+      el.closest(".M9, .aoI, .ip, .gA, [aria-label='Reply']")
+  );
+}
+
 function findComposeBox() {
   const nodes = [
-    ...document.querySelectorAll(
-      'div[aria-label="Message Body"], div[role="textbox"][contenteditable="true"], div.Am.Al.editable'
-    ),
+    ...document.querySelectorAll('div.Am.Al.editable[contenteditable="true"]'),
+    ...document.querySelectorAll('div.LW-avf[contenteditable="true"]'),
+    ...document.querySelectorAll('div[aria-label="Message Body"][contenteditable="true"]'),
+    ...document.querySelectorAll('div[aria-label="Compose body"][contenteditable="true"]'),
+    ...document.querySelectorAll('div[role="textbox"][contenteditable="true"]'),
   ];
-  return nodes.find((node) => node.offsetParent !== null) || nodes[nodes.length - 1] || null;
+  const matches = nodes.filter(isComposeEditor);
+  return matches[matches.length - 1] || null;
 }
 
 function readComposeText() {
@@ -88,8 +122,8 @@ async function ensureComposeBox() {
     return box;
   }
   clickReply();
-  for (let i = 0; i < 12; i += 1) {
-    await sleep(250);
+  for (let i = 0; i < 20; i += 1) {
+    await sleep(200);
     box = findComposeBox();
     if (box) {
       return box;
@@ -98,15 +132,105 @@ async function ensureComposeBox() {
   return null;
 }
 
-function insertReply(box, text) {
+function draftNeedle(text) {
+  return String(text || "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 48);
+}
+
+function hasDraftText(box, text) {
+  const needle = draftNeedle(text);
+  if (!needle || !box) {
+    return false;
+  }
+  const have = (box.innerText || box.textContent || "").replace(/\s+/g, " ");
+  return have.includes(needle);
+}
+
+function escapeHtml(text) {
+  return String(text || "").replace(/[&<>"']/g, (ch) => {
+    return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[ch];
+  });
+}
+
+function selectEditor(box) {
   box.focus();
   const selection = window.getSelection();
   const range = document.createRange();
   range.selectNodeContents(box);
   selection.removeAllRanges();
   selection.addRange(range);
-  document.execCommand("insertText", false, text);
-  box.dispatchEvent(new InputEvent("input", { bubbles: true }));
+}
+
+function insertReply(box, text) {
+  selectEditor(box);
+  document.execCommand("selectAll", false, null);
+  const inserted = document.execCommand("insertText", false, text);
+  if (!inserted || !hasDraftText(box, text)) {
+    selectEditor(box);
+    document.execCommand("insertHTML", false, escapeHtml(text).replace(/\n/g, "<br>"));
+  }
+  if (!hasDraftText(box, text)) {
+    try {
+      const data = new DataTransfer();
+      data.setData("text/plain", text);
+      box.dispatchEvent(
+        new ClipboardEvent("paste", { clipboardData: data, bubbles: true, cancelable: true })
+      );
+    } catch (_error) {
+      /* Gmail may block synthetic paste; other methods still apply. */
+    }
+  }
+  if (!hasDraftText(box, text)) {
+    box.textContent = "";
+    String(text || "")
+      .split("\n")
+      .forEach((line, index) => {
+        if (index) {
+          box.appendChild(document.createElement("br"));
+        }
+        box.appendChild(document.createTextNode(line));
+      });
+  }
+  box.dispatchEvent(
+    new InputEvent("input", { bubbles: true, cancelable: true, inputType: "insertText", data: text })
+  );
+  box.dispatchEvent(new Event("change", { bubbles: true }));
+  box.dispatchEvent(new KeyboardEvent("keyup", { bubbles: true, key: "End" }));
+  box.scrollIntoView({ block: "center", behavior: "smooth" });
+}
+
+async function fillComposeReliable(box, text) {
+  insertReply(box, text);
+  for (let i = 0; i < 8; i += 1) {
+    if (hasDraftText(box, text)) {
+      return true;
+    }
+    await sleep(250);
+    const live = findComposeBox() || box;
+    insertReply(live, text);
+  }
+  return hasDraftText(findComposeBox() || box, text);
+}
+
+function showDraftPreview(text) {
+  const panel = document.getElementById("gmail-bot-panel");
+  if (!panel) {
+    return;
+  }
+  let preview = document.getElementById("gmail-bot-preview");
+  if (!preview) {
+    preview = document.createElement("div");
+    preview.id = "gmail-bot-preview";
+    panel.appendChild(preview);
+  }
+  preview.replaceChildren();
+  const heading = document.createElement("p");
+  heading.textContent = "Draft";
+  const body = document.createElement("pre");
+  body.textContent = text;
+  preview.append(heading, body);
 }
 
 function showSuggestions(items) {
@@ -228,6 +352,9 @@ async function runDraft(redraft) {
   }
   setBusy(true);
   toast(redraft ? "Fixing grammar and redrafting…" : "Writing your reply…");
+  if (!redraft) {
+    ensureComposeBox();
+  }
   const payload = {
     ...email,
     existingDraft: redraft ? existing : "",
@@ -244,17 +371,22 @@ async function runDraft(redraft) {
       return;
     }
     const text = response.draftText || response.text;
-    const box = await ensureComposeBox();
-    if (!box) {
-      toast("Reply box not found. Click Reply, then try again.");
-      return;
-    }
-    insertReply(box, text);
+    showDraftPreview(text);
     showSuggestions(response.suggestions);
     if (response.rulesUrl && document.getElementById("gmail-bot-url") && !document.getElementById("gmail-bot-url").value) {
       document.getElementById("gmail-bot-url").value = response.rulesUrl;
     }
-    toast(redraft ? "Draft updated. Review it, then send." : "Your reply is in the box. Review it, then send.");
+    const box = await ensureComposeBox();
+    if (!box) {
+      toast("Draft is ready in the bot card. Click Reply if you also want it in Gmail's box.");
+      return;
+    }
+    const placed = await fillComposeReliable(box, text);
+    toast(
+      placed
+        ? "Draft is in the reply box. No need to refresh."
+        : "Draft is ready in the bot card. Click the reply box and try Redraft if Gmail hid it."
+    );
   });
 }
 

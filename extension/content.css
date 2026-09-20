@@ -94,6 +94,30 @@
   margin: 0 0 4px 16px;
 }
 
+#gmail-bot-preview {
+  margin-top: 8px;
+  border-top: 1px solid #e5e7eb;
+  padding-top: 8px;
+}
+
+#gmail-bot-preview p {
+  margin: 0 0 6px;
+  font-weight: 600;
+}
+
+#gmail-bot-preview pre {
+  margin: 0;
+  max-height: 160px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  background: #f9fafb;
+  border-radius: 8px;
+  padding: 8px;
+  font: 12px/1.45 Arial, sans-serif;
+  color: #111827;
+}
+
 #gmail-bot-toast {
   position: fixed;
   right: 28px;
