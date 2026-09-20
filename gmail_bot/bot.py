@@ -233,22 +233,32 @@ class InboxBot:
         return drafted
 
     def draft_from_open_mail(self, sender: str, subject: str, body: str = "") -> dict[str, str]:
-        """Create a draft for the Gmail message the user currently has open. Click-only."""
+        """Create a short reply for the open Gmail message. Click-only."""
         if not self.gmail.oauth_ready() and not getattr(self.gmail, "_service", None):
             raise RuntimeError("Gmail is not connected. Keep this app running and click Connect this Gmail.")
         self._assert_account()
         self._refresh_style_examples()
-        message = self._find_open_message(sender, subject, body)
-        created = self._process_message(message.message_id)
-        if not created:
-            raise RuntimeError("This email did not match the saved sender/keyword filters.")
-        item = self.store.get_queue_item(message.message_id) or {}
+        found = self._find_open_message(sender, subject, body)
+        message = ParsedMessage(
+            message_id=found.message_id,
+            thread_id=found.thread_id,
+            sender=sender or found.sender,
+            subject=subject or found.subject,
+            body=body or found.body,
+            snippet=found.snippet,
+            message_id_header=found.message_id_header,
+            references=found.references,
+            reply_to=found.reply_to,
+        )
+        text, draft_id = self._write_draft(message, replace_existing=True)
         self.last_activity = f"drafted open mail at {_utcnow()}"
         return {
-            "draft_id": str(item.get("draft_id") or ""),
+            "draft_id": draft_id,
             "message_id": message.message_id,
             "subject": message.subject,
             "sender": message.sender,
+            "text": text,
+            "draftText": text,
         }
 
     def _find_open_message(self, sender: str, subject: str, body: str = "") -> ParsedMessage:
@@ -301,11 +311,17 @@ class InboxBot:
         self._style_loaded = True
         self.store.replace_style_examples([(ex.subject, ex.body, ex.language) for ex in examples])
 
-    def _process_message(self, message_id: str) -> bool:
-        message = self.gmail.get_message(message_id)
+    def _write_draft(self, message: ParsedMessage, *, replace_existing: bool = False) -> tuple[str, str]:
         if not matches_filters(message, self.settings):
-            return False
-        existing = self.store.get_queue_item(message_id)
+            raise RuntimeError("This email did not match the saved sender/keyword filters.")
+        existing = self.store.get_queue_item(message.message_id)
+        if replace_existing and existing and existing.get("draft_id"):
+            deleter = getattr(self.gmail, "delete_draft", None)
+            if callable(deleter):
+                try:
+                    deleter(str(existing["draft_id"]))
+                except Exception:  # noqa: BLE001
+                    logger.warning("Could not remove previous draft", extra={"event": "draft_replace_failed"})
         attempts = int(existing["attempts"]) + 1 if existing else 1
         self.store.upsert_queue(
             {
@@ -318,54 +334,63 @@ class InboxBot:
                 "attempts": attempts,
             }
         )
+        query = f"{message.subject}\n{message.body}"
+        chunks = self.knowledge.retrieve(query, k=self.settings.retrieve_k)
+        owner_name, owner_email = self._owner_identity()
+        draft = generate_reply(
+            message,
+            chunks,
+            self._style_cache,
+            self.llm,
+            assistant_name=owner_name,
+            owner_email=owner_email,
+        )
+        draft_id = self.gmail.create_draft_reply(message, draft.text, from_email=owner_email)
+        self.gmail.apply_label(message.message_id, self.settings.label_name)
+        self.store.mark_processed(message.message_id, message.thread_id, draft_id)
+        self.store.upsert_queue(
+            {
+                "message_id": message.message_id,
+                "thread_id": message.thread_id,
+                "sender": message.sender,
+                "subject": message.subject,
+                "snippet": message.log_snippet,
+                "status": "drafted",
+                "attempts": attempts,
+                "draft_preview": draft.text,
+                "draft_id": draft_id,
+                "last_error": None,
+            }
+        )
+        self.store.add_job_log(
+            "INFO",
+            "drafted",
+            f"{message.sender} | {message.subject} | draft={draft_id} | {message.log_snippet}",
+        )
+        logger.info(
+            "Drafted reply",
+            extra={
+                "event": "drafted",
+                "message_id": message.message_id,
+                "thread_id": message.thread_id,
+                "draft_id": draft_id,
+                "sender": message.sender,
+                "subject": message.subject,
+                "snippet": message.log_snippet,
+            },
+        )
+        return draft.text, draft_id
+
+    def _process_message(self, message_id: str) -> bool:
+        message = self.gmail.get_message(message_id)
+        if not matches_filters(message, self.settings):
+            return False
         try:
-            query = f"{message.subject}\n{message.body}"
-            chunks = self.knowledge.retrieve(query, k=self.settings.retrieve_k)
-            owner_name, owner_email = self._owner_identity()
-            draft = generate_reply(
-                message,
-                chunks,
-                self._style_cache,
-                self.llm,
-                assistant_name=owner_name,
-                owner_email=owner_email,
-            )
-            draft_id = self.gmail.create_draft_reply(message, draft.text, from_email=owner_email)
-            self.gmail.apply_label(message.message_id, self.settings.label_name)
-            self.store.mark_processed(message.message_id, message.thread_id, draft_id)
-            self.store.upsert_queue(
-                {
-                    "message_id": message.message_id,
-                    "thread_id": message.thread_id,
-                    "sender": message.sender,
-                    "subject": message.subject,
-                    "snippet": message.log_snippet,
-                    "status": "drafted",
-                    "attempts": attempts,
-                    "draft_preview": draft.text,
-                    "draft_id": draft_id,
-                    "last_error": None,
-                }
-            )
-            self.store.add_job_log(
-                "INFO",
-                "drafted",
-                f"{message.sender} | {message.subject} | draft={draft_id} | {message.log_snippet}",
-            )
-            logger.info(
-                "Drafted reply",
-                extra={
-                    "event": "drafted",
-                    "message_id": message.message_id,
-                    "thread_id": message.thread_id,
-                    "draft_id": draft_id,
-                    "sender": message.sender,
-                    "subject": message.subject,
-                    "snippet": message.log_snippet,
-                },
-            )
+            self._write_draft(message)
             return True
         except Exception as exc:  # noqa: BLE001
+            existing = self.store.get_queue_item(message_id)
+            attempts = int(existing["attempts"]) + 1 if existing else 1
             self.store.upsert_queue(
                 {
                     "message_id": message.message_id,

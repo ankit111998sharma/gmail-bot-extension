@@ -110,6 +110,11 @@ class FakeGmail:
         )
         return draft_id
 
+    def delete_draft(self, draft_id: str) -> None:
+        if not draft_id:
+            return
+        self.drafts[:] = [row for row in self.drafts if row["id"] != draft_id]
+
     def apply_label(self, message_id: str, label_name: str) -> None:
         self.labels.append((message_id, label_name))
 

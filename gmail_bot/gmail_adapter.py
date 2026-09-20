@@ -31,6 +31,7 @@ class GmailPort(Protocol):
     def list_message_ids(self, query: str, limit: int = 10) -> list[str]: ...
     def get_message(self, message_id: str) -> ParsedMessage: ...
     def create_draft_reply(self, message: ParsedMessage, reply_text: str, from_email: str = "") -> str: ...
+    def delete_draft(self, draft_id: str) -> None: ...
     def apply_label(self, message_id: str, label_name: str) -> None: ...
     def fetch_sent_examples(self, limit: int = 20) -> list[StyleExample]: ...
 
@@ -245,6 +246,12 @@ class GmailAdapter:
             },
         )
         return draft_id
+
+    def delete_draft(self, draft_id: str) -> None:
+        if not draft_id:
+            return
+        request = self.service.users().drafts().delete(userId=USER, id=draft_id)
+        self._call(request)
 
     def apply_label(self, message_id: str, label_name: str) -> None:
         label_id = self._ensure_label(label_name)
