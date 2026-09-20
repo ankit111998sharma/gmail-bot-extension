@@ -309,6 +309,7 @@ def build_prompt(
     existing_draft: str = "",
     rules: list[str] | None = None,
     notes: str = "",
+    standalone: bool = False,
 ) -> str:
     style_block = "\n\n".join(
         f"Your earlier email {i}:\nSubject: {ex.subject}\n{ex.body}" for i, ex in enumerate(examples[:8], start=1)
@@ -320,15 +321,24 @@ def build_prompt(
     rules_block = "\n".join(f"- {rule}" for rule in (rules or [])[:6]) or "(No website page provided.)"
     notes_block = short_snippet(notes, 400) or "(No extra description provided.)"
     existing_block = short_snippet(strip_quoted_reply(existing_draft), 400) or "(No existing draft.)"
+    if standalone:
+        task = (
+            "Write a short first-person email FROM you TO the other person. "
+            "This is a new Gmail draft, not a reply to an incoming message."
+        )
+        incoming_line = f"Recipient and topic (do not quote): {message.sender or 'the recipient'}; {gist}"
+    else:
+        task = "Write a short first-person reply FROM you TO the other person. You are not the incoming sender."
+        incoming_line = f"Incoming gist (do not quote): {gist}"
     return f"""You are {assistant_name} ({owner_email or "the inbox owner"}).
-Write a short first-person reply FROM you TO the other person. You are not the incoming sender.
+{task}
 Rules:
 - Write a professional business email. Polite, complete sentences, no slang.
 - 2 to 4 short sentences. No subject line.
 - Start with Dear <name> when you know their name, otherwise Hello.
 - If an existing draft is provided, improve that draft. Keep the same request. Fix grammar and tone.
 - Write as yourself. Never write on behalf of {message.sender or "the sender"}.
-- Do not quote, paste, or repeat the incoming email.
+- Do not quote, paste, or repeat the other person's words.
 - You may mention the topic in a few words, such as: {hint}
 - Reuse facts and tone from YOUR earlier sent emails below. Those are messages you already wrote.
 - If a website summary is provided, use it for facts. Do not paste the whole page.
@@ -337,12 +347,12 @@ Rules:
 - Do not write [DRAFT], "review before sending", or "knowledge base".
 - Sign off with Best regards and {assistant_name} only.
 
-Incoming gist (do not quote): {gist}
+{incoming_line}
 
 Existing draft to improve:
 {existing_block}
 
-My optional description for this reply:
+My optional description for this email:
 {notes_block}
 
 Website facts:
@@ -368,6 +378,7 @@ def placeholder_reply(
     examples: list[StyleExample] | None = None,
     rules: list[str] | None = None,
     notes: str = "",
+    standalone: bool = False,
 ) -> str:
     signoff = owner_name or owner_email or "Me"
     hint = topic_hint(message.subject)
@@ -375,40 +386,43 @@ def placeholder_reply(
     sent_line = relevant_sent_line(examples or [], hint, message.body)
     note_line = short_snippet(" ".join((notes or "").split()), 220)
     greet = greeting_line(message.sender, language)
+    thanks = "" if standalone else "Thank you for your email. "
     if language == "hi":
         if note_line:
             text = f"{greet}\n\n{note_line}\n\nधन्यवाद,\n{signoff}"
         elif answers:
             text = f"{greet}\n\n{answers[0]}\n\nधन्यवाद,\n{signoff}"
         elif sent_line:
-            text = f"{greet}\n\nआपके ईमेल के लिए धन्यवाद। {sent_line}\n\nधन्यवाद,\n{signoff}"
+            lead = "" if standalone else "आपके ईमेल के लिए धन्यवाद। "
+            text = f"{greet}\n\n{lead}{sent_line}\n\nधन्यवाद,\n{signoff}"
         elif hint:
-            text = (
-                f"{greet}\n\n"
-                f"{hint} के संबंध में आपका ईमेल प्राप्त हुआ। मैं इसकी जाँच कर शीघ्र उत्तर दूँगा।\n\n"
-                f"धन्यवाद,\n{signoff}"
-            )
+            if standalone:
+                body = f"{hint} के संबंध में यह ईमेल लिख रहा/रही हूँ।"
+            else:
+                body = f"{hint} के संबंध में आपका ईमेल प्राप्त हुआ। मैं इसकी जाँच कर शीघ्र उत्तर दूँगा।"
+            text = f"{greet}\n\n{body}\n\nधन्यवाद,\n{signoff}"
         else:
-            text = f"{greet}\n\nआपका ईमेल प्राप्त हुआ। मैं इसकी जाँच कर शीघ्र उत्तर दूँगा।\n\nधन्यवाद,\n{signoff}"
+            body = "यह ईमेल लिख रहा/रही हूँ।" if standalone else "आपका ईमेल प्राप्त हुआ। मैं इसकी जाँच कर शीघ्र उत्तर दूँगा।"
+            text = f"{greet}\n\n{body}\n\nधन्यवाद,\n{signoff}"
         return weave_rule_sentence(text, rules or [], hint)
     if note_line:
         text = f"{greet}\n\n{note_line}\n\nBest regards,\n{signoff}"
     elif answers:
-        text = f"{greet}\n\nThank you for your email. {answers[0]}\n\nBest regards,\n{signoff}"
+        text = f"{greet}\n\n{thanks}{answers[0]}\n\nBest regards,\n{signoff}"
     elif sent_line:
-        text = f"{greet}\n\nThank you for your email. {sent_line}\n\nBest regards,\n{signoff}"
+        text = f"{greet}\n\n{thanks}{sent_line}\n\nBest regards,\n{signoff}"
     elif hint:
-        text = (
-            f"{greet}\n\n"
-            f"Thank you for your email regarding {hint}. I will review this and follow up with you shortly.\n\n"
-            f"Best regards,\n{signoff}"
-        )
+        if standalone:
+            body = f"I am writing regarding {hint}."
+        else:
+            body = f"Thank you for your email regarding {hint}. I will review this and follow up with you shortly."
+        text = f"{greet}\n\n{body}\n\nBest regards,\n{signoff}"
     else:
-        text = (
-            f"{greet}\n\n"
-            f"Thank you for your email. I will review this and follow up with you shortly.\n\n"
-            f"Best regards,\n{signoff}"
-        )
+        if standalone:
+            body = "I wanted to follow up with you on this."
+        else:
+            body = "Thank you for your email. I will review this and follow up with you shortly."
+        text = f"{greet}\n\n{body}\n\nBest regards,\n{signoff}"
     return weave_rule_sentence(text, rules or [], hint)
 
 
@@ -423,6 +437,7 @@ def generate_reply(
     existing_draft: str = "",
     rules: list[str] | None = None,
     notes: str = "",
+    standalone: bool = False,
 ) -> DraftResult:
     rules = rules or []
     notes = (notes or "").strip()
@@ -443,6 +458,7 @@ def generate_reply(
             existing_draft=existing_draft,
             rules=rules,
             notes=notes,
+            standalone=standalone,
         )
         try:
             text = correct_grammar(llm.generate(prompt).strip())
@@ -483,6 +499,7 @@ def generate_reply(
                 examples=examples,
                 rules=rules,
                 notes=notes,
+                standalone=standalone,
             )
         )
         engine = "placeholder"

@@ -377,6 +377,95 @@ class InboxBot:
             "draftText": payload["text"],
             "suggestions": suggestions,
             "rulesUrl": self.store.get_setting("rules_url"),
+            "mode": "reply",
+        }
+
+    def draft_compose_mail(
+        self,
+        to: str,
+        subject: str = "",
+        existing_draft: str = "",
+        rules_url: str = "",
+        notes: str = "",
+        gmail_draft_id: str = "",
+        thread_id: str = "",
+        page_email: str = "",
+    ) -> dict[str, Any]:
+        """Create or update a standalone Gmail draft (not an in-thread reply)."""
+        if not self.gmail.oauth_ready() and not getattr(self.gmail, "_service", None):
+            raise RuntimeError("Gmail is not connected. Keep this app running and click Connect this Gmail.")
+        self._assert_account()
+        self._refresh_style_examples()
+        _, owner_email = self._owner_identity()
+        page = normalize_email(page_email)
+        if page and owner_email and page != owner_email:
+            raise RuntimeError(
+                f"This Gmail tab is {page}, but the OAuth token is for {owner_email}. "
+                "Open that inbox or click Connect this Gmail so drafts are created on your behalf."
+            )
+        draft_id_hint = (gmail_draft_id or "").strip()
+        live_to = (to or "").strip()
+        live_subject = (subject or "").strip()
+        live_body = (existing_draft or "").strip()
+        live_thread = (thread_id or "").strip()
+        if draft_id_hint:
+            getter = getattr(self.gmail, "get_draft", None)
+            if callable(getter):
+                try:
+                    meta = getter(draft_id_hint) or {}
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning("Could not load the open Gmail draft: %s", exc, extra={"event": "draft_get_failed"})
+                    meta = {}
+                live_thread = live_thread or str(meta.get("thread_id") or "")
+                live_to = live_to or str(meta.get("to") or "")
+                live_subject = live_subject or str(meta.get("subject") or "")
+                if not live_body:
+                    live_body = str(meta.get("text") or "")
+        if not reply_recipient(
+            ParsedMessage(
+                message_id="",
+                thread_id="",
+                sender=live_to,
+                subject=live_subject,
+                body="",
+                snippet="",
+                to_header=live_to,
+            ),
+            owner_email,
+        ):
+            raise RuntimeError("Enter who this Gmail draft is To, or open a draft that already has a recipient.")
+        key = f"draft:{draft_id_hint}" if draft_id_hint else f"compose:{normalize_email(live_to)}:{(live_subject or 'new')[:80]}"
+        message = ParsedMessage(
+            message_id=key,
+            thread_id=live_thread,
+            sender=live_to,
+            subject=live_subject or topic_hint(notes) or "(No Subject)",
+            body=live_body or notes,
+            snippet=short_snippet(live_body or notes),
+            to_header=live_to,
+        )
+        rules, fetch_notes = self._load_rules(rules_url, f"{message.subject}\n{topic_hint(message.subject)}")
+        payload = self._write_draft(
+            message,
+            replace_existing=True,
+            existing_draft=live_body,
+            rules=rules,
+            notes=notes,
+            gmail_draft_id=draft_id_hint,
+            standalone=True,
+        )
+        suggestions = list(payload.get("suggestions") or []) + fetch_notes
+        self.last_activity = f"wrote Gmail draft at {_utcnow()}"
+        return {
+            "draft_id": payload["draft_id"],
+            "message_id": message.message_id,
+            "subject": message.subject,
+            "sender": message.sender,
+            "text": payload["text"],
+            "draftText": payload["text"],
+            "suggestions": suggestions,
+            "rulesUrl": self.store.get_setting("rules_url"),
+            "mode": "compose",
         }
 
     def redraft_existing(
@@ -528,12 +617,17 @@ class InboxBot:
         rules: list[str] | None = None,
         notes: str = "",
         gmail_draft_id: str = "",
+        standalone: bool = False,
     ) -> dict[str, Any]:
-        if not matches_filters(message, self.settings):
+        if not standalone and not matches_filters(message, self.settings):
             raise RuntimeError("This email did not match the saved sender/keyword filters.")
         _, owner_email = self._owner_identity()
         if not reply_recipient(message, owner_email):
-            raise RuntimeError("Could not find who to reply to. Open the other person's message.")
+            raise RuntimeError(
+                "Enter who this Gmail draft is To."
+                if standalone
+                else "Could not find who to reply to. Open the other person's message."
+            )
         existing = self.store.get_queue_item(message.message_id)
         live_id, gmail_draft_text = self._lookup_thread_draft(message.thread_id)
         if not (existing_draft or "").strip():
@@ -568,12 +662,16 @@ class InboxBot:
             existing_draft=existing_draft,
             rules=rules or [],
             notes=notes,
+            standalone=standalone,
         )
-        draft_id = self._save_draft_reply(message, draft.text, owner_email, draft_id_to_update, owner_name)
-        try:
-            self.gmail.apply_label(message.message_id, self.settings.label_name)
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("Could not label drafted mail: %s", exc, extra={"event": "label_apply_failed"})
+        draft_id = self._save_draft_reply(
+            message, draft.text, owner_email, draft_id_to_update, owner_name, standalone=standalone
+        )
+        if not standalone:
+            try:
+                self.gmail.apply_label(message.message_id, self.settings.label_name)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("Could not label drafted mail: %s", exc, extra={"event": "label_apply_failed"})
         self.store.mark_processed(message.message_id, message.thread_id, draft_id)
         self.store.upsert_queue(
             {
@@ -630,6 +728,7 @@ class InboxBot:
         owner_email: str,
         draft_id: str,
         owner_name: str = "",
+        standalone: bool = False,
     ) -> str:
         updater = getattr(self.gmail, "update_draft_reply", None)
         tried: set[str] = set()
@@ -641,7 +740,12 @@ class InboxBot:
             tried.add(want)
             try:
                 return updater(
-                    want, message, text, from_email=owner_email, from_name=owner_name
+                    want,
+                    message,
+                    text,
+                    from_email=owner_email,
+                    from_name=owner_name,
+                    standalone=standalone,
                 )
             except TypeError:
                 return updater(want, message, text, from_email=owner_email)
@@ -652,13 +756,18 @@ class InboxBot:
         updated = try_update(draft_id)
         if updated:
             return updated
-        live_id, _ = self._lookup_thread_draft(message.thread_id)
-        updated = try_update(live_id)
-        if updated:
-            return updated
+        if not standalone:
+            live_id, _ = self._lookup_thread_draft(message.thread_id)
+            updated = try_update(live_id)
+            if updated:
+                return updated
         try:
             return self.gmail.create_draft_reply(
-                message, text, from_email=owner_email, from_name=owner_name
+                message,
+                text,
+                from_email=owner_email,
+                from_name=owner_name,
+                standalone=standalone,
             )
         except TypeError:
             return self.gmail.create_draft_reply(message, text, from_email=owner_email)

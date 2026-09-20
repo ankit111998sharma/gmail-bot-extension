@@ -33,6 +33,56 @@ function readPageAccount() {
   return lastEmail(labeled?.getAttribute("aria-label") || "");
 }
 
+function hasOpenThread() {
+  return Boolean(document.querySelector("h2.hP, h2[data-legacy-thread-id]"));
+}
+
+function isDraftsView() {
+  return /#drafts\b/i.test(location.hash || "") || /\/drafts/i.test(location.pathname || "");
+}
+
+function readComposeTo() {
+  const chips = [
+    ...document.querySelectorAll('.vR span[email], .afx span[email], div[data-hovercard-id][email], span[email]'),
+  ];
+  const emails = [];
+  chips.forEach((el) => {
+    const email = normalizeEmail(el.getAttribute("email") || el.getAttribute("data-hovercard-id") || el.innerText);
+    if (email && !emails.includes(email)) {
+      emails.push(email);
+    }
+  });
+  if (emails.length) {
+    return emails.join(", ");
+  }
+  const input = document.querySelector(
+    'textarea[name="to"], input[name="to"], input[aria-label="To recipients"], input[peoplekit-id], input[aria-label="To"]'
+  );
+  return (input?.value || "").trim();
+}
+
+function readComposeSubject() {
+  const input = document.querySelector('input[name="subjectbox"], input[aria-label="Subject"]');
+  return (input?.value || "").trim();
+}
+
+function composeModeSelected() {
+  return Boolean(document.getElementById("gmail-bot-mode-compose")?.checked);
+}
+
+function shouldUseComposeMode(extras) {
+  if (extras && extras.mode) {
+    return String(extras.mode).toLowerCase() === "compose";
+  }
+  if (composeModeSelected()) {
+    return true;
+  }
+  if (isDraftsView()) {
+    return true;
+  }
+  return Boolean(findComposeBox() && !hasOpenThread());
+}
+
 function readOpenEmail(ownerEmail) {
   const subject =
     document.querySelector("h2.hP")?.innerText ||
@@ -153,6 +203,40 @@ function readComposeText() {
   return box ? (box.innerText || "").trim() : "";
 }
 
+function clickCompose() {
+  const btn =
+    document.querySelector('div[role="button"][gh="cm"]') ||
+    document.querySelector('div[gh="cm"]') ||
+    document.querySelector('div[role="button"][aria-label="Compose"]') ||
+    document.querySelector('.T-I.T-I-KE.L3');
+  if (btn) {
+    btn.click();
+  }
+}
+
+function fillComposeHeader(to, subject) {
+  const sub = document.querySelector('input[name="subjectbox"], input[aria-label="Subject"]');
+  if (sub && subject && !(sub.value || "").trim()) {
+    sub.focus();
+    sub.value = subject;
+    sub.dispatchEvent(new Event("input", { bubbles: true }));
+    sub.dispatchEvent(new Event("change", { bubbles: true }));
+  }
+  if (readComposeTo() || !to) {
+    return;
+  }
+  const input = document.querySelector(
+    'textarea[name="to"], input[name="to"], input[aria-label="To recipients"], input[aria-label="To"]'
+  );
+  if (!input) {
+    return;
+  }
+  input.focus();
+  input.value = to;
+  input.dispatchEvent(new Event("input", { bubbles: true }));
+  input.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "Enter" }));
+}
+
 function clickReply() {
   const replies = [
     ...document.querySelectorAll('div[role="button"][aria-label="Reply"]'),
@@ -223,12 +307,16 @@ function sleep(ms) {
   return new Promise((resolve) => window.setTimeout(resolve, ms));
 }
 
-async function ensureComposeBox() {
+async function ensureComposeBox(preferNew) {
   let box = findComposeBox();
   if (box) {
     return box;
   }
-  clickReply();
+  if (preferNew) {
+    clickCompose();
+  } else {
+    clickReply();
+  }
   for (let i = 0; i < 30; i += 1) {
     await sleep(200);
     box = findComposeBox();
@@ -236,7 +324,11 @@ async function ensureComposeBox() {
       return box;
     }
     if (i === 8 || i === 16) {
-      clickReply();
+      if (preferNew) {
+        clickCompose();
+      } else {
+        clickReply();
+      }
     }
   }
   return null;
@@ -398,53 +490,110 @@ function showSuggestions(items) {
   box.append(heading, ul);
 }
 
-function ensurePanel() {
-  if (document.getElementById("gmail-bot-panel")) {
+function syncPanelMode() {
+  const compose = composeModeSelected() || isDraftsView();
+  const toWrap = document.getElementById("gmail-bot-to-wrap");
+  const draftBtn = document.getElementById("gmail-bot-draft");
+  const composeRadio = document.getElementById("gmail-bot-mode-compose");
+  const replyRadio = document.getElementById("gmail-bot-mode-reply");
+  if (isDraftsView() && composeRadio && !replyRadio?.checked) {
+    composeRadio.checked = true;
+  }
+  if (toWrap) {
+    toWrap.hidden = !(composeModeSelected() || isDraftsView());
+  }
+  if (draftBtn) {
+    draftBtn.textContent = composeModeSelected() || isDraftsView() ? "Write / update draft" : "Draft reply";
+  }
+  const toEl = document.getElementById("gmail-bot-to");
+  if (toEl && !toEl.value) {
+    toEl.value = readComposeTo();
+  }
+}
+
+function upgradePanel() {
+  const panel = document.getElementById("gmail-bot-panel");
+  if (!panel || document.getElementById("gmail-bot-mode")) {
+    syncPanelMode();
     return;
   }
-  const panel = document.createElement("div");
-  panel.id = "gmail-bot-panel";
-  const hint = document.createElement("p");
-  hint.className = "hint";
-  hint.textContent = "Both fields are optional. Leave blank to skip. A URL uses the website; notes guide the draft. AI corrects the text when available.";
-  const urlLabel = document.createElement("label");
-  urlLabel.setAttribute("for", "gmail-bot-url");
-  urlLabel.textContent = "Website URL";
-  const input = document.createElement("input");
-  input.id = "gmail-bot-url";
-  input.type = "url";
-  input.placeholder = "https://example.com/rules (optional)";
-  const notesLabel = document.createElement("label");
-  notesLabel.setAttribute("for", "gmail-bot-notes");
-  notesLabel.textContent = "Description for this draft";
-  const notes = document.createElement("textarea");
-  notes.id = "gmail-bot-notes";
-  notes.placeholder = "What should this reply say? (optional)";
-  const actions = document.createElement("div");
-  actions.id = "gmail-bot-actions";
-  const draftBtn = document.createElement("button");
-  draftBtn.id = "gmail-bot-draft";
-  draftBtn.type = "button";
-  draftBtn.textContent = "Draft reply";
-  const redraftBtn = document.createElement("button");
-  redraftBtn.id = "gmail-bot-redraft";
-  redraftBtn.type = "button";
-  redraftBtn.textContent = "Redraft & grammar";
-  draftBtn.addEventListener("click", (event) => {
-    event.preventDefault();
-    event.stopPropagation();
-    runDraft(false);
+  const hint = panel.querySelector(".hint");
+  const mode = document.createElement("div");
+  mode.id = "gmail-bot-mode";
+  mode.className = "mode";
+  mode.innerHTML =
+    '<label><input type="radio" name="gmail-bot-mode" id="gmail-bot-mode-reply" value="reply" checked /> Reply to open email</label>' +
+    '<label><input type="radio" name="gmail-bot-mode" id="gmail-bot-mode-compose" value="compose" /> Write or update a Gmail draft</label>';
+  const toWrap = document.createElement("div");
+  toWrap.id = "gmail-bot-to-wrap";
+  toWrap.hidden = true;
+  const toLabel = document.createElement("label");
+  toLabel.setAttribute("for", "gmail-bot-to");
+  toLabel.textContent = "To";
+  const toInput = document.createElement("input");
+  toInput.id = "gmail-bot-to";
+  toInput.type = "text";
+  toInput.placeholder = "name@example.com";
+  toWrap.append(toLabel, toInput);
+  if (hint && hint.nextSibling) {
+    panel.insertBefore(mode, hint.nextSibling);
+    panel.insertBefore(toWrap, mode.nextSibling);
+  } else {
+    panel.prepend(mode, toWrap);
+  }
+  mode.querySelectorAll("input").forEach((el) => {
+    el.addEventListener("change", syncPanelMode);
   });
-  redraftBtn.addEventListener("click", (event) => {
-    event.preventDefault();
-    event.stopPropagation();
-    runDraft(true);
-  });
-  actions.append(draftBtn, redraftBtn);
-  const suggestions = document.createElement("div");
-  suggestions.id = "gmail-bot-suggestions";
-  panel.append(hint, urlLabel, input, notesLabel, notes, actions, suggestions);
-  document.body.appendChild(panel);
+  syncPanelMode();
+}
+
+function ensurePanel() {
+  if (!document.getElementById("gmail-bot-panel")) {
+    const panel = document.createElement("div");
+    panel.id = "gmail-bot-panel";
+    const hint = document.createElement("p");
+    hint.className = "hint";
+    hint.textContent = "Choose reply or a Gmail draft. URL and notes are optional. Leave blank to skip.";
+    const urlLabel = document.createElement("label");
+    urlLabel.setAttribute("for", "gmail-bot-url");
+    urlLabel.textContent = "Website URL";
+    const input = document.createElement("input");
+    input.id = "gmail-bot-url";
+    input.type = "url";
+    input.placeholder = "https://example.com/rules (optional)";
+    const notesLabel = document.createElement("label");
+    notesLabel.setAttribute("for", "gmail-bot-notes");
+    notesLabel.textContent = "Description for this draft";
+    const notes = document.createElement("textarea");
+    notes.id = "gmail-bot-notes";
+    notes.placeholder = "What should this email say? (optional)";
+    const actions = document.createElement("div");
+    actions.id = "gmail-bot-actions";
+    const draftBtn = document.createElement("button");
+    draftBtn.id = "gmail-bot-draft";
+    draftBtn.type = "button";
+    draftBtn.textContent = "Draft reply";
+    const redraftBtn = document.createElement("button");
+    redraftBtn.id = "gmail-bot-redraft";
+    redraftBtn.type = "button";
+    redraftBtn.textContent = "Redraft & grammar";
+    draftBtn.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      runDraft(false);
+    });
+    redraftBtn.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      runDraft(true);
+    });
+    actions.append(draftBtn, redraftBtn);
+    const suggestions = document.createElement("div");
+    suggestions.id = "gmail-bot-suggestions";
+    panel.append(hint, urlLabel, input, notesLabel, notes, actions, suggestions);
+    document.body.appendChild(panel);
+  }
+  upgradePanel();
 }
 
 function togglePanel() {
@@ -506,23 +655,30 @@ function applyOptionalFields(extras) {
   ensurePanel();
   const urlEl = document.getElementById("gmail-bot-url");
   const notesEl = document.getElementById("gmail-bot-notes");
+  const toEl = document.getElementById("gmail-bot-to");
+  const composeRadio = document.getElementById("gmail-bot-mode-compose");
+  const replyRadio = document.getElementById("gmail-bot-mode-reply");
   if (urlEl && extras.rulesUrl != null) {
     urlEl.value = extras.rulesUrl;
   }
   if (notesEl && extras.notes != null) {
     notesEl.value = extras.notes;
   }
+  if (toEl && extras.to != null) {
+    toEl.value = extras.to;
+  }
+  if (String(extras.mode || "").toLowerCase() === "compose" && composeRadio) {
+    composeRadio.checked = true;
+  } else if (String(extras.mode || "").toLowerCase() === "reply" && replyRadio) {
+    replyRadio.checked = true;
+  }
+  syncPanelMode();
 }
 
 async function runDraft(redraft, extras) {
   applyOptionalFields(extras);
   const health = await fetchHealth();
-  const email = readOpenEmail(health.connected_email || health.target_email || "");
-  if (!email.subject && !email.sender) {
-    const error = "Open an email first, then draft or redraft.";
-    toast(error);
-    return { ok: false, error };
-  }
+  const composeMode = shouldUseComposeMode(extras);
   const rulesUrl = (
     extras && extras.rulesUrl != null
       ? extras.rulesUrl
@@ -534,23 +690,48 @@ async function runDraft(redraft, extras) {
       : document.getElementById("gmail-bot-notes")?.value || ""
   ).trim();
   setBusy(true);
-  toast("Updating the existing draft…");
-  await ensureComposeBox();
+  toast(composeMode ? "Writing your Gmail draft…" : "Updating the existing draft…");
+  await ensureComposeBox(composeMode);
   await sleep(400);
   const existing = readComposeText();
-  const threadId = readThreadId();
   const gmailDraftId = readComposeDraftId();
+  const payload = {
+    existingDraft: existing,
+    rulesUrl,
+    notes,
+    gmailDraftId,
+    pageEmail: readPageAccount(),
+  };
+  if (composeMode) {
+    payload.mode = "compose";
+    payload.to = (
+      extras && extras.to != null ? extras.to : document.getElementById("gmail-bot-to")?.value || readComposeTo()
+    ).trim();
+    payload.subject = readComposeSubject();
+    payload.sender = payload.to;
+    if (!payload.to && !gmailDraftId) {
+      setBusy(false);
+      const error = "Enter who this Gmail draft is To, or open a draft that already has a recipient.";
+      toast(error);
+      return { ok: false, error };
+    }
+  } else {
+    const email = readOpenEmail(health.connected_email || health.target_email || "");
+    if (!email.subject && !email.sender) {
+      setBusy(false);
+      const error = "Open an email first, or switch to Write or update a Gmail draft.";
+      toast(error);
+      return { ok: false, error };
+    }
+    payload.mode = "reply";
+    payload.subject = email.subject;
+    payload.sender = email.sender;
+    payload.body = email.body;
+    payload.threadId = readThreadId();
+  }
   const response = await sendRuntime({
     action: "draftOpen",
-    payload: {
-      ...email,
-      existingDraft: existing,
-      rulesUrl,
-      notes,
-      threadId,
-      gmailDraftId,
-      pageEmail: readPageAccount(),
-    },
+    payload,
   });
   setBusy(false);
   if (!(response && response.ok && (response.draftText || response.text))) {
@@ -563,7 +744,8 @@ async function runDraft(redraft, extras) {
   showDraftPreview(text);
   showSuggestions(response.suggestions);
   await sleep(400);
-  let box = await ensureComposeBox();
+  let box = await ensureComposeBox(composeMode);
+  fillComposeHeader(payload.to || "", response.subject || payload.subject || "");
   let placed = false;
   if (box && hasDraftText(box, text)) {
     placed = true;
@@ -573,7 +755,8 @@ async function runDraft(redraft, extras) {
   if (!placed && savedId && savedId !== gmailDraftId) {
     openGmailDraft(savedId);
     await sleep(900);
-    box = await ensureComposeBox();
+    box = await ensureComposeBox(composeMode);
+    fillComposeHeader(payload.to || "", response.subject || payload.subject || "");
     if (box) {
       placed = await fillComposeReliable(box, text);
     }
@@ -581,8 +764,10 @@ async function runDraft(redraft, extras) {
   placed = (await keepDraftVisible(text)) || placed;
   toast(
     placed
-      ? "Draft is in the reply box. No need to refresh."
-      : "Draft is ready in the bot card. Click Reply if Gmail hid the box."
+      ? composeMode
+        ? "Draft is in your Gmail compose box. No need to refresh."
+        : "Draft is in the reply box. No need to refresh."
+      : "Draft is ready in the bot card. Open the Gmail draft if the box is hidden."
   );
   return { ok: true, placed, draftText: text, suggestions: response.suggestions };
 }
@@ -598,6 +783,8 @@ chrome.runtime.onMessage.addListener((request, _sender, sendResponse) => {
   runDraft(Boolean(request.redraft), {
     rulesUrl: request.rulesUrl || "",
     notes: request.notes || "",
+    mode: request.mode || "",
+    to: request.to || "",
   })
     .then(sendResponse)
     .catch((error) => sendResponse({ ok: false, error: error.message || String(error) }));

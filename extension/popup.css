@@ -33,6 +33,26 @@ h1 {
   font-size: 12px;
 }
 
+.mode {
+  display: grid;
+  gap: 6px;
+  margin: 0 0 10px;
+}
+
+.mode label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: #111827;
+  font-size: 12px;
+  margin: 0;
+}
+
+.mode input {
+  width: auto;
+  margin: 0;
+}
+
 label {
   display: block;
   color: #6b7280;

@@ -164,6 +164,29 @@ def render_home(bot) -> None:
 def render_drafts(bot) -> None:
     rows = bot.store.list_queue()
     st.caption("Review drafts here, then send them yourself from Gmail. Redraft fixes grammar and uses the rules URL.")
+    st.markdown("##### Write or update a Gmail draft")
+    st.caption("Creates an individual email in Gmail Drafts (not a reply). Open that draft in Gmail to edit it further.")
+    to_val = st.text_input("To", key="compose-to", placeholder="name@example.com")
+    subject_val = st.text_input("Subject", key="compose-subject", placeholder="Optional")
+    notes_val = st.text_area(
+        "What should this email say?",
+        key="compose-notes",
+        height=120,
+        placeholder="Optional. Leave blank to polish an existing Gmail draft body after you open it in Gmail.",
+    )
+    if st.button("Write Gmail draft", type="primary"):
+        try:
+            result = bot.draft_compose_mail(
+                to_val,
+                subject_val,
+                notes=notes_val,
+                rules_url=st.session_state.get("rules_url_input") or bot.store.get_setting("rules_url"),
+            )
+            st.success("Saved to Gmail Drafts. Open Gmail → Drafts to review it. It is not sent.")
+            st.text_area("Draft preview", value=result.get("draftText") or "", height=160, disabled=True)
+        except Exception as exc:  # noqa: BLE001
+            st.error(str(exc))
+    st.markdown("##### Reply drafts")
     if not rows:
         st.markdown('<p class="muted">No drafts yet. Start the bot after Gmail is connected.</p>', unsafe_allow_html=True)
     else:
@@ -325,7 +348,7 @@ def render_setup(bot) -> None:
 
 1. Keep this app running (`run.bat`).
 2. Chrome → `chrome://extensions` → Developer mode → Load unpacked → select the `extension` folder in this project.
-3. Pin **Gmail Draft Bot**, open Gmail, then click the extension icon. Optional website URL and description appear there. Leave both blank to skip them. Use **Draft reply** or **Redraft & grammar**.
+3. Pin **Gmail Draft Bot**, open Gmail, then click the extension icon. Choose **Reply to open email** or **Write or update a Gmail draft**. Optional website URL and description appear there. Leave both blank to skip them.
         """
     )
 
@@ -333,7 +356,7 @@ def render_setup(bot) -> None:
 bot = _controller()
 st.markdown(_CSS, unsafe_allow_html=True)
 st.title("Gmail Draft Assistant")
-st.markdown('<p class="hero-note">A simple local helper that drafts replies. You send them.</p>', unsafe_allow_html=True)
+st.markdown('<p class="hero-note">A simple local helper that drafts replies and Gmail drafts. You send them.</p>', unsafe_allow_html=True)
 
 home, drafts, knowledge, health, setup = st.tabs(["Home", "Drafts", "Knowledge", "Health", "Setup"])
 with home:

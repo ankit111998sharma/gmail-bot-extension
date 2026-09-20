@@ -112,7 +112,12 @@ class FakeGmail:
         return self.messages[message_id]
 
     def create_draft_reply(
-        self, message: ParsedMessage, reply_text: str, from_email: str = "", from_name: str = ""
+        self,
+        message: ParsedMessage,
+        reply_text: str,
+        from_email: str = "",
+        from_name: str = "",
+        standalone: bool = False,
     ) -> str:
         from gmail_bot.gmail_adapter import reply_recipient
 
@@ -126,6 +131,8 @@ class FakeGmail:
                 "from_name": from_name,
                 "text": reply_text,
                 "message_id_header": message.message_id_header,
+                "standalone": standalone,
+                "subject": message.subject,
             }
         )
         return draft_id
@@ -137,6 +144,7 @@ class FakeGmail:
         reply_text: str,
         from_email: str = "",
         from_name: str = "",
+        standalone: bool = False,
     ) -> str:
         from gmail_bot.gmail_adapter import reply_recipient
 
@@ -146,8 +154,23 @@ class FakeGmail:
                 row["from"] = from_email
                 row["from_name"] = from_name
                 row["to"] = reply_recipient(message, from_email)
+                row["standalone"] = standalone
+                row["subject"] = message.subject
                 return draft_id
         raise RuntimeError("Requested entity was not found.")
+
+    def get_draft(self, draft_id: str) -> dict[str, str]:
+        for row in self.drafts:
+            if row["id"] == draft_id:
+                return {
+                    "id": str(row["id"]),
+                    "thread_id": str(row.get("thread_id") or ""),
+                    "text": str(row.get("text") or ""),
+                    "to": str(row.get("to") or ""),
+                    "subject": str(row.get("subject") or ""),
+                    "from": str(row.get("from") or ""),
+                }
+        return {}
 
     def find_thread_draft(self, thread_id: str) -> tuple[str, str]:
         for row in reversed(self.drafts):

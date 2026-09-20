@@ -33,7 +33,12 @@ class GmailPort(Protocol):
     def list_message_ids(self, query: str, limit: int = 10) -> list[str]: ...
     def get_message(self, message_id: str) -> ParsedMessage: ...
     def create_draft_reply(
-        self, message: ParsedMessage, reply_text: str, from_email: str = "", from_name: str = ""
+        self,
+        message: ParsedMessage,
+        reply_text: str,
+        from_email: str = "",
+        from_name: str = "",
+        standalone: bool = False,
     ) -> str: ...
     def update_draft_reply(
         self,
@@ -42,7 +47,9 @@ class GmailPort(Protocol):
         reply_text: str,
         from_email: str = "",
         from_name: str = "",
+        standalone: bool = False,
     ) -> str: ...
+    def get_draft(self, draft_id: str) -> dict[str, str]: ...
     def find_thread_draft(self, thread_id: str) -> tuple[str, str]: ...
     def delete_draft(self, draft_id: str) -> None: ...
     def apply_label(self, message_id: str, label_name: str) -> None: ...
@@ -151,25 +158,32 @@ def encode_rfc2822_raw(raw_bytes: bytes) -> str:
 
 
 def build_draft_payload(
-    message: ParsedMessage, reply_text: str, from_email: str = "", from_name: str = ""
+    message: ParsedMessage,
+    reply_text: str,
+    from_email: str = "",
+    from_name: str = "",
+    standalone: bool = False,
 ) -> dict[str, Any]:
-    """RFC 2822 reply draft: explicit From, CRLF raw, threadId + In-Reply-To/References."""
+    """RFC 2822 draft: explicit From, CRLF raw. Replies keep threadId + In-Reply-To/References."""
     owner = (from_email or "").strip()
     if not owner:
         raise ValueError("Gmail drafts need an explicit From address from the signed-in account.")
     to_addr = reply_recipient(message, owner)
     if not to_addr:
-        raise ValueError("Reply drafts need a To address (the other person).")
+        raise ValueError("Drafts need a To address (the other person).")
     msg = EmailMessage(policy=SMTP)
     msg["From"] = format_from_header(owner, from_name)
     msg["To"] = to_addr
-    msg["Subject"] = reply_subject(message.subject)
-    if message.message_id_header:
-        msg["In-Reply-To"] = message.message_id_header
-        references = (message.references or "").strip()
-        msg["References"] = (
-            f"{references} {message.message_id_header}".strip() if references else message.message_id_header
-        )
+    if standalone:
+        msg["Subject"] = (message.subject or "").strip() or "(No Subject)"
+    else:
+        msg["Subject"] = reply_subject(message.subject)
+        if message.message_id_header:
+            msg["In-Reply-To"] = message.message_id_header
+            references = (message.references or "").strip()
+            msg["References"] = (
+                f"{references} {message.message_id_header}".strip() if references else message.message_id_header
+            )
     msg.set_content(reply_text or "", subtype="plain", charset="utf-8")
     payload_message: dict[str, Any] = {"raw": encode_rfc2822_raw(msg.as_bytes(policy=SMTP))}
     thread_id = (message.thread_id or "").strip()
@@ -301,12 +315,19 @@ class GmailAdapter:
         return (from_name or "").strip(), email
 
     def create_draft_reply(
-        self, message: ParsedMessage, reply_text: str, from_email: str = "", from_name: str = ""
+        self,
+        message: ParsedMessage,
+        reply_text: str,
+        from_email: str = "",
+        from_name: str = "",
+        standalone: bool = False,
     ) -> str:
         name, email = self._sender_identity(from_email, from_name)
         if not email:
             raise RuntimeError("Gmail drafts need the signed-in account in the From header.")
-        body = build_draft_payload(message, reply_text, from_email=email, from_name=name)
+        body = build_draft_payload(
+            message, reply_text, from_email=email, from_name=name, standalone=standalone
+        )
         request = self.service.users().drafts().create(userId=USER, body=body)
         result = self._call(request)
         draft_id = result.get("id") or ""
@@ -331,13 +352,18 @@ class GmailAdapter:
         reply_text: str,
         from_email: str = "",
         from_name: str = "",
+        standalone: bool = False,
     ) -> str:
         if not draft_id:
-            return self.create_draft_reply(message, reply_text, from_email=from_email, from_name=from_name)
+            return self.create_draft_reply(
+                message, reply_text, from_email=from_email, from_name=from_name, standalone=standalone
+            )
         name, email = self._sender_identity(from_email, from_name)
         if not email:
             raise RuntimeError("Gmail drafts need the signed-in account in the From header.")
-        body = build_draft_payload(message, reply_text, from_email=email, from_name=name)
+        body = build_draft_payload(
+            message, reply_text, from_email=email, from_name=name, standalone=standalone
+        )
         body["id"] = draft_id
         request = self.service.users().drafts().update(userId=USER, id=draft_id, body=body)
         result = self._call(request)
@@ -355,6 +381,23 @@ class GmailAdapter:
             },
         )
         return updated
+
+    def get_draft(self, draft_id: str) -> dict[str, str]:
+        want = (draft_id or "").strip()
+        if not want:
+            return {}
+        full = self._call(self.service.users().drafts().get(userId=USER, id=want, format="full"))
+        message = full.get("message") or {}
+        payload = message.get("payload") or {}
+        headers = header_map(payload.get("headers"))
+        return {
+            "id": str(full.get("id") or want),
+            "thread_id": str(message.get("threadId") or ""),
+            "text": extract_body(payload),
+            "to": headers.get("to", ""),
+            "subject": headers.get("subject", ""),
+            "from": headers.get("from", ""),
+        }
 
     def find_thread_draft(self, thread_id: str) -> tuple[str, str]:
         want = (thread_id or "").strip()

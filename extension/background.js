@@ -112,6 +112,8 @@ async function draftFromPopup(request) {
     redraft: Boolean(request.redraft),
     rulesUrl: request.rulesUrl || "",
     notes: request.notes || "",
+    mode: request.mode || "",
+    to: request.to || "",
   });
   return response || { ok: false, error: "Refresh the Gmail tab, then try again." };
 }

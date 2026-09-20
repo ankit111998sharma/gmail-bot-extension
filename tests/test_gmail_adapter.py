@@ -85,6 +85,21 @@ def test_draft_payload_requires_from_and_names_inbox_owner() -> None:
     assert payload["message"]["threadId"] == "t1"
 
 
+def test_standalone_draft_payload_is_new_email_not_reply() -> None:
+    message = make_message(subject="Fee payment", thread_id="", message_id_header="<id-1@mail.example.com>")
+    payload = build_draft_payload(
+        message, "Please reopen the fee payment link.", from_email="me@gmail.com", standalone=True
+    )
+    assert "threadId" not in payload["message"]
+    raw = base64.urlsafe_b64decode(payload["message"]["raw"].encode("ascii"))
+    parsed = message_from_bytes(raw, policy=email_policy.default)
+    assert parsed["Subject"] == "Fee payment"
+    assert parsed.get("In-Reply-To") is None
+    assert parsed.get("References") is None
+    assert "me@gmail.com" in parsed["From"]
+    assert "ada@example.com" in parsed["To"].lower()
+
+
 def test_reply_is_from_inbox_owner_not_sender() -> None:
     message = make_message(reply_to="me@gmail.com")
     assert reply_recipient(message, "me@gmail.com") == "Ada <ada@example.com>"

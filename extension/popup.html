@@ -9,13 +9,21 @@
     <h1>Gmail Draft Bot</h1>
     <p id="status" class="status">Checking local app…</p>
     <p class="hint">
-      Both fields are optional. Leave blank to skip. A URL uses the website; notes guide the draft. AI
-      corrects the text when available.
+      Choose <strong>Reply</strong> for an open inbox thread, or <strong>Gmail draft</strong> to write or
+      update an individual draft. URL and notes are optional.
     </p>
+    <div class="mode">
+      <label><input type="radio" name="draft-mode" id="mode-reply" value="reply" checked /> Reply to open email</label>
+      <label><input type="radio" name="draft-mode" id="mode-compose" value="compose" /> Write or update a Gmail draft</label>
+    </div>
+    <div id="draft-to-wrap" hidden>
+      <label for="draft-to">To</label>
+      <input id="draft-to" type="text" placeholder="name@example.com" />
+    </div>
     <label for="website-url">Website URL</label>
     <input id="website-url" type="url" placeholder="https://example.com/rules (optional)" />
     <label for="draft-notes">Description for this draft</label>
-    <textarea id="draft-notes" placeholder="What should this reply say? (optional)"></textarea>
+    <textarea id="draft-notes" placeholder="What should this email say? (optional)"></textarea>
     <div class="actions">
       <button id="draft-btn" type="button">Draft reply</button>
       <button id="redraft-btn" type="button">Redraft &amp; grammar</button>

@@ -59,12 +59,30 @@ async function refreshStatus() {
   status.classList.remove("is-error");
 }
 
+function selectedMode() {
+  return document.getElementById("mode-compose")?.checked ? "compose" : "reply";
+}
+
+function syncMode() {
+  const compose = selectedMode() === "compose";
+  const wrap = document.getElementById("draft-to-wrap");
+  if (wrap) {
+    wrap.hidden = !compose;
+  }
+  const btn = document.getElementById("draft-btn");
+  if (btn) {
+    btn.textContent = compose ? "Write / update draft" : "Draft reply";
+  }
+}
+
 async function requestDraft(redraft) {
   return send({
     action: "draftFromPopup",
     redraft: Boolean(redraft),
     rulesUrl: (document.getElementById("website-url").value || "").trim(),
     notes: (document.getElementById("draft-notes").value || "").trim(),
+    mode: selectedMode(),
+    to: (document.getElementById("draft-to")?.value || "").trim(),
   });
 }
 
@@ -94,9 +112,18 @@ async function runDraft(redraft) {
   const text = result.draftText || result.text;
   showPreview(text);
   showSuggestions(result.suggestions);
-  showMessage(result.placed ? "Draft is in the Gmail reply box." : "Draft is ready. Check Gmail if the reply box is closed.");
+  showMessage(
+    result.placed
+      ? selectedMode() === "compose"
+        ? "Draft is in your Gmail compose box."
+        : "Draft is in the Gmail reply box."
+      : "Draft is ready. Check Gmail Drafts if the compose box is closed."
+  );
 }
 
 document.getElementById("draft-btn").addEventListener("click", () => runDraft(false));
 document.getElementById("redraft-btn").addEventListener("click", () => runDraft(true));
+document.getElementById("mode-reply").addEventListener("change", syncMode);
+document.getElementById("mode-compose").addEventListener("change", syncMode);
+syncMode();
 refreshStatus();

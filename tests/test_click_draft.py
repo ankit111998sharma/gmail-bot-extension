@@ -364,3 +364,80 @@ def test_click_rejects_gmail_tab_for_other_account(settings: Settings, store) ->
         assert "me@gmail.com" in str(exc).lower()
     assert gmail.drafts == []
     assert gmail.send_called is False
+
+
+def test_compose_creates_individual_gmail_draft(settings: Settings, store) -> None:
+    gmail = FakeGmail([])
+    bot = InboxBot(settings=settings, store=store, gmail=gmail)
+    result = bot.draft_compose_mail(
+        "Ada <ada@example.com>",
+        "Fee payment",
+        notes="Please reopen the fee payment link.",
+    )
+    assert result["mode"] == "compose"
+    assert len(gmail.drafts) == 1
+    assert gmail.drafts[0]["from"] == "me@gmail.com"
+    assert "ada@example.com" in gmail.drafts[0]["to"].lower()
+    assert gmail.drafts[0]["standalone"] is True
+    assert "thank you for your email" not in result["draftText"].lower()
+    assert "fee payment" in result["draftText"].lower() or "reopen" in result["draftText"].lower()
+    assert gmail.labels == []
+    assert gmail.send_called is False
+
+
+def test_compose_updates_open_gmail_draft_in_place(settings: Settings, store) -> None:
+    gmail = FakeGmail([])
+    bot = InboxBot(settings=settings, store=store, gmail=gmail)
+    first = bot.draft_compose_mail("Ada <ada@example.com>", "Hours", notes="please confirm hours")
+    result = bot.draft_compose_mail(
+        "Ada <ada@example.com>",
+        "Hours",
+        existing_draft="hello please confirm the office hours",
+        gmail_draft_id=first["draft_id"],
+    )
+    assert len(gmail.drafts) == 1
+    assert result["draft_id"] == first["draft_id"]
+    assert "please confirm" in result["draftText"].lower() or "hours" in result["draftText"].lower()
+    assert gmail.send_called is False
+
+
+def test_compose_requires_a_recipient(settings: Settings, store) -> None:
+    gmail = FakeGmail([])
+    bot = InboxBot(settings=settings, store=store, gmail=gmail)
+    try:
+        bot.draft_compose_mail("")
+        raise AssertionError("expected missing To")
+    except RuntimeError as exc:
+        assert "to" in str(exc).lower()
+    assert gmail.drafts == []
+
+
+def test_local_api_compose_mode(settings: Settings, store) -> None:
+    import http.client
+    import json
+
+    gmail = FakeGmail([])
+    bot = InboxBot(settings=settings, store=store, gmail=gmail)
+    server = start_local_api(port=0, bot=bot)
+    host, port = server.server_address
+    try:
+        conn = http.client.HTTPConnection(host, port, timeout=5)
+        payload = json.dumps(
+            {
+                "mode": "compose",
+                "to": "ada@example.com",
+                "subject": "Fee payment",
+                "notes": "Please reopen the fee payment link.",
+            }
+        )
+        conn.request("POST", "/api/draft-open", body=payload, headers={"Content-Type": "application/json"})
+        response = conn.getresponse()
+        data = json.loads(response.read().decode("utf-8"))
+        conn.close()
+        assert response.status == 200
+        assert data["ok"] is True
+        assert data["mode"] == "compose"
+        assert len(gmail.drafts) == 1
+        assert gmail.send_called is False
+    finally:
+        server.shutdown()

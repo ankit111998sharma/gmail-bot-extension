@@ -22,7 +22,14 @@ def test_extension_popup_shows_optional_url_and_notes() -> None:
     assert "notes" in script
     assert "draftFromPopup" in background
     assert "runDraft" in background
-    assert "gmailDraftId" in content
+    assert "Write or update a Gmail draft" in popup
+    assert "mode-compose" in popup
+    assert "draft-to" in popup
+    assert "selectedMode" in script
+    assert "mode" in script
+    assert "shouldUseComposeMode" in content
+    assert "draft_compose" in content or "mode-compose" in content
+    assert "Write or update a Gmail draft" in content or "gmail-bot-mode-compose" in content
     assert "pageEmail" in content
     assert "g_editable" in content
     assert "keepDraftVisible" in content

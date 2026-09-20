@@ -83,6 +83,27 @@ def make_handler(bot: InboxBot) -> type[BaseHTTPRequestHandler]:
                 data.get("gmailDraftId") or data.get("gmail_draft_id") or data.get("draftId") or ""
             )
             page_email = str(data.get("pageEmail") or data.get("page_email") or "")
+            mode = str(data.get("mode") or data.get("draftMode") or "reply").strip().lower()
+            to_addr = str(data.get("to") or data.get("toHeader") or data.get("to_header") or "")
+            compose_mode = mode in {"compose", "draft", "new"}
+            if compose_mode:
+                try:
+                    result = bot.draft_compose_mail(
+                        to_addr or sender,
+                        subject,
+                        existing_draft=existing_draft,
+                        rules_url=rules_url,
+                        notes=notes,
+                        gmail_draft_id=gmail_draft_id,
+                        thread_id=thread_id,
+                        page_email=page_email,
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning("Click-to-draft failed: %s", exc, extra={"event": "click_draft_failed"})
+                    self._write(400, {"ok": False, "error": str(exc)})
+                    return
+                self._write(200, {"ok": True, **result})
+                return
             if not sender and not subject:
                 self._write(400, {"ok": False, "error": "Open an email in Gmail first."})
                 return
