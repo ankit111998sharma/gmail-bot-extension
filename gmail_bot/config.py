@@ -54,6 +54,8 @@ class Settings:
     assistant_name: str = "Gmail Bot"
     gmail_account: str = ""
     local_api_port: int = 8787
+    gemini_api_key: str = ""
+    gemini_model: str = "gemini-2.0-flash"
 
     def ensure_dirs(self) -> None:
         self.credentials_path.parent.mkdir(parents=True, exist_ok=True)
@@ -105,6 +107,8 @@ def load_settings(project_root: Path | None = None) -> Settings:
         assistant_name=os.getenv("ASSISTANT_NAME", "Gmail Bot"),
         gmail_account=normalize_email(os.getenv("GMAIL_ACCOUNT", "")),
         local_api_port=max(1024, _as_int(os.getenv("LOCAL_API_PORT"), 8787)),
+        gemini_api_key=(os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY") or "").strip(),
+        gemini_model=(os.getenv("GEMINI_MODEL") or "gemini-2.0-flash").strip() or "gemini-2.0-flash",
     )
     settings.ensure_dirs()
     return settings

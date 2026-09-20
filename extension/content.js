@@ -260,13 +260,22 @@ function ensurePanel() {
   }
   const panel = document.createElement("div");
   panel.id = "gmail-bot-panel";
-  const label = document.createElement("label");
-  label.setAttribute("for", "gmail-bot-url");
-  label.textContent = "Rules or regulations URL";
+  const hint = document.createElement("p");
+  hint.className = "hint";
+  hint.textContent = "Both fields are optional. Leave blank to skip. A URL uses the website; notes guide the draft. AI corrects the text when available.";
+  const urlLabel = document.createElement("label");
+  urlLabel.setAttribute("for", "gmail-bot-url");
+  urlLabel.textContent = "Website URL";
   const input = document.createElement("input");
   input.id = "gmail-bot-url";
   input.type = "url";
-  input.placeholder = "https://example.com/rules";
+  input.placeholder = "https://example.com/rules (optional)";
+  const notesLabel = document.createElement("label");
+  notesLabel.setAttribute("for", "gmail-bot-notes");
+  notesLabel.textContent = "Description for this draft";
+  const notes = document.createElement("textarea");
+  notes.id = "gmail-bot-notes";
+  notes.placeholder = "What should this reply say? (optional)";
   const actions = document.createElement("div");
   actions.id = "gmail-bot-actions";
   const draftBtn = document.createElement("button");
@@ -290,13 +299,17 @@ function ensurePanel() {
   actions.append(draftBtn, redraftBtn);
   const suggestions = document.createElement("div");
   suggestions.id = "gmail-bot-suggestions";
-  panel.append(label, input, actions, suggestions);
+  panel.append(hint, urlLabel, input, notesLabel, notes, actions, suggestions);
   document.body.appendChild(panel);
-  fetchHealth().then((health) => {
-    if (health.rules_url && !input.value) {
-      input.value = health.rules_url;
-    }
-  });
+}
+
+function togglePanel() {
+  ensurePanel();
+  const panel = document.getElementById("gmail-bot-panel");
+  if (!panel) {
+    return;
+  }
+  panel.classList.toggle("is-open");
 }
 
 function ensureButton() {
@@ -306,13 +319,13 @@ function ensureButton() {
   const btn = document.createElement("button");
   btn.id = "gmail-bot-fab";
   btn.type = "button";
-  btn.title = "Draft a reply for this email";
-  btn.setAttribute("aria-label", "Draft a reply for this email");
+  btn.title = "Open draft options";
+  btn.setAttribute("aria-label", "Open draft options");
   btn.textContent = "✉️";
   btn.addEventListener("click", (event) => {
     event.preventDefault();
     event.stopPropagation();
-    runDraft(false);
+    togglePanel();
   });
   document.body.appendChild(btn);
 }
@@ -358,7 +371,8 @@ async function runDraft(redraft) {
   const payload = {
     ...email,
     existingDraft: redraft ? existing : "",
-    rulesUrl: document.getElementById("gmail-bot-url")?.value || "",
+    rulesUrl: (document.getElementById("gmail-bot-url")?.value || "").trim(),
+    notes: (document.getElementById("gmail-bot-notes")?.value || "").trim(),
   };
   chrome.runtime.sendMessage({ action: "draftOpen", payload }, async (response) => {
     setBusy(false);
@@ -373,9 +387,6 @@ async function runDraft(redraft) {
     const text = response.draftText || response.text;
     showDraftPreview(text);
     showSuggestions(response.suggestions);
-    if (response.rulesUrl && document.getElementById("gmail-bot-url") && !document.getElementById("gmail-bot-url").value) {
-      document.getElementById("gmail-bot-url").value = response.rulesUrl;
-    }
     const box = await ensureComposeBox();
     if (!box) {
       toast("Draft is ready in the bot card. Click Reply if you also want it in Gmail's box.");

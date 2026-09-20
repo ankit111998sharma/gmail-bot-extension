@@ -57,6 +57,55 @@ def test_local_api_draft_open_endpoint(settings: Settings, store) -> None:
         assert "knowledge base" not in data["draftText"].lower()
         assert len(gmail.drafts) == 1
         assert gmail.send_called is False
+
+        conn = http.client.HTTPConnection(host, port, timeout=5)
+        conn.request("GET", "/api/health")
+        health = json.loads(conn.getresponse().read().decode("utf-8"))
+        conn.close()
+        assert health["ok"] is True
+        assert "ai_ready" in health
+    finally:
+        server.shutdown()
+
+
+def test_local_api_optional_notes_without_url(settings: Settings, store, monkeypatch) -> None:
+    import http.client
+    import json
+
+    def boom(*_args, **_kwargs):
+        raise AssertionError("blank URL should not fetch a website")
+
+    monkeypatch.setattr("gmail_bot.bot.fetch_page_rules", boom)
+    message = make_message(
+        subject="Re: Request to Reopen Fee Payment Link",
+        body="As discussed on call, I hope the issue has been resolved.",
+        sender="Rachana <esupport@kuk.ac.in>",
+    )
+    gmail = FakeGmail([message])
+    bot = InboxBot(settings=settings, store=store, gmail=gmail)
+    server = start_local_api(port=0, bot=bot)
+    host, port = server.server_address
+    try:
+        conn = http.client.HTTPConnection(host, port, timeout=5)
+        payload = json.dumps(
+            {
+                "sender": "Rachana <esupport@kuk.ac.in>",
+                "subject": "Re: Request to Reopen Fee Payment Link",
+                "body": "As discussed on call, I hope the issue has been resolved.",
+                "websiteUrl": "",
+                "notes": "Please ask them to reopen the fee payment link.",
+            }
+        )
+        conn.request("POST", "/api/draft-open", body=payload, headers={"Content-Type": "application/json"})
+        response = conn.getresponse()
+        data = json.loads(response.read().decode("utf-8"))
+        conn.close()
+        assert response.status == 200
+        assert data["ok"] is True
+        text = data["draftText"].lower()
+        assert "fee payment" in text
+        assert "as discussed on call" not in text
+        assert gmail.send_called is False
     finally:
         server.shutdown()
 
@@ -143,4 +192,42 @@ def test_click_replaces_previous_bot_draft(settings: Settings, store) -> None:
     result = bot.draft_from_open_mail("Ada <ada@example.com>", "Office hours?", "what are hours?")
     assert len(gmail.drafts) == 1
     assert gmail.drafts[0]["id"] == result["draft_id"]
+    assert gmail.send_called is False
+
+
+def test_blank_url_and_notes_bypass_internet(settings: Settings, store, monkeypatch) -> None:
+    def boom(*_args, **_kwargs):
+        raise AssertionError("blank URL should not fetch a website")
+
+    monkeypatch.setattr("gmail_bot.bot.fetch_page_rules", boom)
+    store.set_setting("rules_url", "https://kuk.ac.in/fee-rules")
+    message = make_message()
+    gmail = FakeGmail([message])
+    bot = InboxBot(settings=settings, store=store, gmail=gmail)
+    result = bot.draft_from_open_mail("Ada <ada@example.com>", "Office hours?", "what are hours?")
+    assert "draftText" in result
+    assert gmail.send_called is False
+
+
+def test_optional_notes_shape_the_draft(settings: Settings, store, monkeypatch) -> None:
+    def boom(*_args, **_kwargs):
+        raise AssertionError("notes-only draft should not fetch a website")
+
+    monkeypatch.setattr("gmail_bot.bot.fetch_page_rules", boom)
+    message = make_message(
+        subject="Re: Request to Reopen Fee Payment Link",
+        body="As discussed on call, I hope the issue has been resolved.",
+        sender="Rachana <esupport@kuk.ac.in>",
+    )
+    gmail = FakeGmail([message])
+    bot = InboxBot(settings=settings, store=store, gmail=gmail)
+    result = bot.draft_from_open_mail(
+        "Rachana <esupport@kuk.ac.in>",
+        "Re: Request to Reopen Fee Payment Link",
+        "As discussed on call, I hope the issue has been resolved.",
+        notes="Please ask them to reopen the fee payment link.",
+    )
+    text = result["draftText"].lower()
+    assert "fee payment" in text
+    assert "as discussed on call" not in text
     assert gmail.send_called is False

@@ -21,6 +21,7 @@ data/gmail/*
 
 # Runtime data
 data/*.db
+data/*.db-*
 data/*.sqlite
 *.db
 logs/

@@ -160,15 +160,14 @@ class InboxBot:
         return cleaned
 
     def _load_rules(self, rules_url: str, topic: str) -> tuple[list[str], list[str]]:
-        raw = (rules_url or self.store.get_setting("rules_url")).strip()
+        raw = (rules_url or "").strip()
         if not raw:
             return [], []
         try:
             url = normalize_rules_url(raw)
         except ValueError as exc:
             return [], [str(exc)]
-        if (rules_url or "").strip():
-            self.store.set_setting("rules_url", url)
+        self.store.set_setting("rules_url", url)
         try:
             return fetch_page_rules(url, topic), []
         except Exception as exc:  # noqa: BLE001
@@ -264,6 +263,7 @@ class InboxBot:
         body: str = "",
         existing_draft: str = "",
         rules_url: str = "",
+        notes: str = "",
     ) -> dict[str, Any]:
         """Create or redraft a short reply for the open Gmail message. Click-only."""
         if not self.gmail.oauth_ready() and not getattr(self.gmail, "_service", None):
@@ -299,6 +299,7 @@ class InboxBot:
             replace_existing=True,
             existing_draft=existing_draft,
             rules=rules,
+            notes=notes,
         )
         suggestions = list(payload.get("suggestions") or []) + fetch_notes
         self.last_activity = f"drafted open mail at {_utcnow()}"
@@ -313,7 +314,9 @@ class InboxBot:
             "rulesUrl": self.store.get_setting("rules_url"),
         }
 
-    def redraft_existing(self, message_id: str, draft_text: str = "", rules_url: str = "") -> dict[str, Any]:
+    def redraft_existing(
+        self, message_id: str, draft_text: str = "", rules_url: str = "", notes: str = ""
+    ) -> dict[str, Any]:
         item = self.store.get_queue_item(message_id)
         if not item:
             raise RuntimeError("That draft was not found. Open the email in Gmail and draft it first.")
@@ -336,7 +339,18 @@ class InboxBot:
             body,
             existing_draft=existing,
             rules_url=rules_url,
+            notes=notes,
         )
+
+    def _reply_llm(self, notes: str, rules: list[str] | None) -> LlmPort:
+        if not ((notes or "").strip() or (rules or [])):
+            return self.llm
+        if getattr(self.llm, "name", "") != "placeholder":
+            return self.llm
+        try:
+            return build_llm(self.settings, prefer_ai=True)
+        except Exception:  # noqa: BLE001
+            return self.llm
 
     def _find_open_message(self, sender: str, subject: str, body: str = "") -> ParsedMessage:
         _, owner_email = self._owner_identity()
@@ -427,6 +441,7 @@ class InboxBot:
         replace_existing: bool = False,
         existing_draft: str = "",
         rules: list[str] | None = None,
+        notes: str = "",
     ) -> dict[str, Any]:
         if not matches_filters(message, self.settings):
             raise RuntimeError("This email did not match the saved sender/keyword filters.")
@@ -453,7 +468,7 @@ class InboxBot:
                 "attempts": attempts,
             }
         )
-        query = f"{message.subject}\n{message.body}\n{existing_draft}"
+        query = f"{message.subject}\n{message.body}\n{existing_draft}\n{notes}"
         chunks = [
             RetrievedChunk(source="url-rules", text=rule, score=1.0) for rule in (rules or []) if rule.strip()
         ] + self.knowledge.retrieve(query, k=self.settings.retrieve_k)
@@ -462,11 +477,12 @@ class InboxBot:
             message,
             chunks,
             self._style_examples_for(message),
-            self.llm,
+            self._reply_llm(notes, rules),
             assistant_name=owner_name,
             owner_email=owner_email,
             existing_draft=existing_draft,
             rules=rules or [],
+            notes=notes,
         )
         draft_id = self.gmail.create_draft_reply(message, draft.text, from_email=owner_email)
         self.gmail.apply_label(message.message_id, self.settings.label_name)

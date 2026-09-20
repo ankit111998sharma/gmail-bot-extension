@@ -150,7 +150,7 @@ def render_home(bot) -> None:
     m1.metric("Drafts made", status.processed_count)
     m2.metric("Waiting", status.queue_pending)
     m3.metric("Failed", status.queue_failed)
-    st.caption("On Gmail, click the blue bot icon to draft. Use Redraft to fix grammar. Keep this window running.")
+    st.caption("On Gmail, click the bot icon for optional website URL and notes, then draft. Keep this window running.")
 
     st.markdown("##### Recent activity")
     logs = bot.store.recent_job_logs(8)
@@ -276,7 +276,7 @@ def render_setup(bot) -> None:
 
 1. Keep this app running (`run.bat`).
 2. Chrome → `chrome://extensions` → Developer mode → Load unpacked → select the `extension` folder in this project.
-3. Open Gmail, open an email, paste an optional rules URL in the bot card, then click **Draft reply**. Use **Redraft & fix grammar** to correct an existing draft.
+3. Open Gmail, click the blue bot icon, optionally paste a website URL and/or a description, then click **Draft reply**. Leave both blank to skip them. Use **Redraft & grammar** to correct an existing draft.
         """
     )
 

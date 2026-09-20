@@ -147,3 +147,46 @@ def test_redraft_uses_rules_without_copying_incoming() -> None:
     assert "as discussed on call" not in draft.text.lower()
     assert "deadline" in " ".join(draft.suggestions).lower() or "deadline" in draft.text.lower()
     assert "asharma111998" in draft.text or "Me" in draft.text or "I need" in draft.text
+
+
+def test_placeholder_uses_optional_notes_and_skips_when_blank() -> None:
+    message = make_message(
+        sender="Rachana <esupport@kuk.ac.in>",
+        subject="Re: Request to Reopen Fee Payment Link",
+        body="As discussed on call, I hope the issue has been resolved.",
+    )
+    with_notes = placeholder_reply(
+        message, [], "en", owner_name="asharma111998", notes="Please ask them to reopen the fee payment link."
+    )
+    without = placeholder_reply(message, [], "en", owner_name="asharma111998")
+    assert "fee payment link" in with_notes.lower()
+    assert "as discussed on call" not in with_notes.lower()
+    assert "Please ask them to reopen" not in without
+
+
+class _FakeGemini:
+    name = "gemini"
+
+    def generate(self, prompt: str) -> str:
+        assert "reopen the fee payment link" in prompt.lower()
+        return "Hello,\n\nPlease reopen the fee payment link.\n\nBest regards,\nme"
+
+
+def test_ai_llm_uses_notes_when_provided() -> None:
+    message = make_message(
+        sender="Rachana <esupport@kuk.ac.in>",
+        subject="Re: Request to Reopen Fee Payment Link",
+        body="As discussed on call, I hope the issue has been resolved.",
+    )
+    draft = generate_reply(
+        message,
+        [],
+        [],
+        _FakeGemini(),
+        assistant_name="me",
+        owner_email="me@gmail.com",
+        notes="Ask them to reopen the fee payment link",
+    )
+    assert draft.engine == "gemini"
+    assert "reopen the fee payment link" in draft.text.lower()
+    assert "as discussed on call" not in draft.text.lower()

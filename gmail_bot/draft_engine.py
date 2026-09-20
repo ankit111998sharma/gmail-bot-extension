@@ -172,6 +172,17 @@ def _insert_before_signoff(text: str, sentence: str) -> str:
     return text.rstrip() + "\n\n" + extra
 
 
+def weave_notes(text: str, notes: str) -> str:
+    cleaned = short_snippet(" ".join((notes or "").split()), 220)
+    if not cleaned:
+        return text
+    if _norm(cleaned) in _norm(text):
+        return text
+    if cleaned[-1] not in ".!?":
+        cleaned += "."
+    return _insert_before_signoff(text, cleaned)
+
+
 def weave_rule_sentence(text: str, rules: list[str], hint: str) -> str:
     rule = relevant_rule_line(rules, hint)
     if not rule:
@@ -191,6 +202,7 @@ def redraft_existing(
     owner_name: str,
     owner_email: str,
     language: str,
+    notes: str = "",
 ) -> str:
     cleaned = correct_grammar(strip_quoted_reply(existing))
     if len(cleaned) < 12:
@@ -202,8 +214,10 @@ def redraft_existing(
             owner_email=owner_email,
             examples=examples,
             rules=rules,
+            notes=notes,
         )
     else:
+        cleaned = weave_notes(cleaned, notes)
         cleaned = weave_rule_sentence(cleaned, rules, topic_hint(message.subject))
     return correct_grammar(cleaned)
 
@@ -237,6 +251,7 @@ def build_prompt(
     owner_email: str = "",
     existing_draft: str = "",
     rules: list[str] | None = None,
+    notes: str = "",
 ) -> str:
     style_block = "\n\n".join(
         f"Your earlier email {i}:\nSubject: {ex.subject}\n{ex.body}" for i, ex in enumerate(examples[:8], start=1)
@@ -245,7 +260,8 @@ def build_prompt(
     context_block = "\n".join(answers) or "(No matching FAQ answer.)"
     hint = topic_hint(message.subject) or "this"
     gist = short_snippet(message.body, 70)
-    rules_block = "\n".join(f"- {rule}" for rule in (rules or [])[:6]) or "(No rules page provided.)"
+    rules_block = "\n".join(f"- {rule}" for rule in (rules or [])[:6]) or "(No website page provided.)"
+    notes_block = short_snippet(notes, 400) or "(No extra description provided.)"
     existing_block = short_snippet(strip_quoted_reply(existing_draft), 400) or "(No existing draft.)"
     return f"""You are {assistant_name} ({owner_email or "the inbox owner"}).
 Write a short first-person reply FROM you TO the other person. You are not the incoming sender.
@@ -255,8 +271,8 @@ Rules:
 - Do not quote, paste, or repeat the incoming email.
 - You may mention the topic in a few words, such as: {hint}
 - Reuse facts and tone from YOUR earlier sent emails below. Those are messages you already wrote.
-- Use the rules/regulations list for facts. Do not paste the whole page.
-- Correct grammar. Keep the meaning of any existing draft.
+- If a website summary is provided, use it for facts. Do not paste the whole page.
+- If a description is provided, follow it. Correct grammar.
 - Do not paste knowledge-base text, guidelines, FAQs, or disclaimers.
 - Do not write [DRAFT], "review before sending", or "knowledge base".
 - Sign off as {assistant_name} only.
@@ -266,7 +282,10 @@ Incoming gist (do not quote): {gist}
 Existing draft to improve:
 {existing_block}
 
-Published rules and regulations:
+My optional description for this reply:
+{notes_block}
+
+Website facts:
 {rules_block}
 
 Your earlier sent emails on this topic:
@@ -288,13 +307,17 @@ def placeholder_reply(
     owner_email: str = "",
     examples: list[StyleExample] | None = None,
     rules: list[str] | None = None,
+    notes: str = "",
 ) -> str:
     signoff = owner_name or owner_email or "Me"
     hint = topic_hint(message.subject)
     answers = useful_answers(message, chunks)
     sent_line = relevant_sent_line(examples or [], hint, message.body)
+    note_line = short_snippet(" ".join((notes or "").split()), 220)
     if language == "hi":
-        if answers:
+        if note_line:
+            text = f"नमस्ते,\n\n{note_line}\n\nधन्यवाद,\n{signoff}"
+        elif answers:
             text = f"नमस्ते,\n\n{answers[0]}\n\nधन्यवाद,\n{signoff}"
         elif sent_line:
             text = f"नमस्ते,\n\nआपके संदेश के लिए धन्यवाद। {sent_line}\n\nधन्यवाद,\n{signoff}"
@@ -307,7 +330,9 @@ def placeholder_reply(
         else:
             text = f"नमस्ते,\n\nआपका संदेश मिल गया है। मैं जाँच कर जल्द उत्तर दूँगा।\n\nधन्यवाद,\n{signoff}"
         return weave_rule_sentence(text, rules or [], hint)
-    if answers:
+    if note_line:
+        text = f"Hello,\n\n{note_line}\n\nBest regards,\n{signoff}"
+    elif answers:
         text = f"Hello,\n\n{answers[0]}\n\nBest regards,\n{signoff}"
     elif sent_line:
         text = f"Hello,\n\nThank you for the update. {sent_line}\n\nBest regards,\n{signoff}"
@@ -332,13 +357,40 @@ def generate_reply(
     owner_email: str = "",
     existing_draft: str = "",
     rules: list[str] | None = None,
+    notes: str = "",
 ) -> DraftResult:
     rules = rules or []
-    language = detect_language(existing_draft or message.body or message.subject)
+    notes = (notes or "").strip()
+    language = detect_language(existing_draft or notes or message.body or message.subject)
     answers = useful_answers(message, chunks)
-    missing = not answers and not rules
+    missing = not answers and not rules and not notes
     owner_name = assistant_name
     suggestions = rule_suggestions(rules, topic_hint(message.subject))
+    is_placeholder = isinstance(llm, PlaceholderLlm) or getattr(llm, "name", "") == "placeholder"
+    if not is_placeholder:
+        prompt = build_prompt(
+            message,
+            chunks,
+            examples,
+            assistant_name=assistant_name,
+            language=language,
+            owner_email=owner_email,
+            existing_draft=existing_draft,
+            rules=rules,
+            notes=notes,
+        )
+        try:
+            text = correct_grammar(llm.generate(prompt).strip())
+            return DraftResult(
+                text=text.strip(),
+                engine=getattr(llm, "name", "llm"),
+                language=language,
+                used_chunks=chunks,
+                missing_context=missing,
+                suggestions=suggestions,
+            )
+        except Exception:  # noqa: BLE001
+            is_placeholder = True
     if existing_draft.strip():
         text = redraft_existing(
             existing_draft,
@@ -349,9 +401,10 @@ def generate_reply(
             owner_name=owner_name,
             owner_email=owner_email,
             language=language,
+            notes=notes,
         )
         engine = "redraft"
-    elif isinstance(llm, PlaceholderLlm) or getattr(llm, "name", "") == "placeholder":
+    else:
         text = correct_grammar(
             placeholder_reply(
                 message,
@@ -361,22 +414,10 @@ def generate_reply(
                 owner_email=owner_email,
                 examples=examples,
                 rules=rules,
+                notes=notes,
             )
         )
         engine = "placeholder"
-    else:
-        prompt = build_prompt(
-            message,
-            chunks,
-            examples,
-            assistant_name=assistant_name,
-            language=language,
-            owner_email=owner_email,
-            existing_draft=existing_draft,
-            rules=rules,
-        )
-        text = correct_grammar(llm.generate(prompt).strip())
-        engine = getattr(llm, "name", "llm")
     return DraftResult(
         text=text.strip(),
         engine=engine,
