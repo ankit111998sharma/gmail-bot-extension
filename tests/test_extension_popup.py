@@ -16,6 +16,7 @@ def test_extension_popup_shows_optional_url_and_notes() -> None:
     assert "Draft reply" in popup
     assert "optional" in popup.lower()
     assert "draftFromPopup" in script
+    assert "shouldRetry" in script
     assert "rulesUrl" in script
     assert "notes" in script
     assert "draftFromPopup" in background

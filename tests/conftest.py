@@ -21,6 +21,8 @@ def settings(tmp_path: Path) -> Settings:
         knowledge_dir=root / "data" / "knowledge",
         poll_seconds=5,
         inbox_llm="placeholder",
+        guardian_enabled=False,
+        guardian_seconds=60,
     )
     s.ensure_dirs()
     return s

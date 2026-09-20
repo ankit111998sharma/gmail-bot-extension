@@ -7,6 +7,7 @@ import streamlit as st
 
 from gmail_bot.bot import get_controller
 from gmail_bot.config import load_settings
+from gmail_bot.guardian import short_report
 from gmail_bot.rag import KnowledgeBase
 
 st.set_page_config(page_title="Gmail Draft Assistant", page_icon="✉️", layout="centered")
@@ -150,7 +151,7 @@ def render_home(bot) -> None:
     m1.metric("Drafts made", status.processed_count)
     m2.metric("Waiting", status.queue_pending)
     m3.metric("Failed", status.queue_failed)
-    st.caption("On Gmail, click the Chrome extension icon for optional website URL and notes, then draft. Keep this window running.")
+    st.caption("On Gmail, click the Chrome extension icon for optional website URL and notes, then draft. The Health tab watches this project in the background.")
 
     st.markdown("##### Recent activity")
     logs = bot.store.recent_job_logs(8)
@@ -253,6 +254,54 @@ def render_knowledge(bot) -> None:
         )
 
 
+def render_health(bot) -> None:
+    st.caption(
+        "A background checker watches this project. It repairs local files, retries recoverable draft errors, "
+        "and can index websites you list. It does not copy other people's extensions or send mail."
+    )
+    report = bot.guardian.summary()
+    running = bool(bot._guardian_thread and bot._guardian_thread.is_alive())
+    st.markdown(
+        f'<div class="status-line">{"Watching in the background." if running else "Background checker is off."} '
+        f"{short_report(report)}</div>",
+        unsafe_allow_html=True,
+    )
+    if st.button("Scan and repair now", type="primary", width="stretch"):
+        with st.spinner("Checking this project…"):
+            report = bot.guardian.scan_and_repair()
+        st.rerun()
+    fixed = report.get("fixed") or []
+    suggestions = report.get("suggestions") or []
+    if fixed:
+        st.markdown("##### Repairs applied")
+        for item in fixed:
+            st.write(f"- {item}")
+    else:
+        st.markdown('<p class="muted">No automatic repairs in the last scan.</p>', unsafe_allow_html=True)
+    if suggestions:
+        st.markdown("##### Suggestions")
+        for item in suggestions:
+            st.write(f"- {item}")
+    if "guardian_urls" not in st.session_state:
+        st.session_state.guardian_urls = bot.store.get_setting("guardian_learn_urls")
+    st.markdown("##### Optional websites")
+    st.text_area(
+        "Public pages to learn from",
+        key="guardian_urls",
+        height=100,
+        placeholder="https://your-school.edu/rules\nOne URL per line. Leave blank to skip.",
+    )
+    st.caption("Use your own rules pages or public docs. Do not paste other people's private extension code.")
+    if st.button("Learn from these websites", width="stretch"):
+        urls = [line.strip() for line in st.session_state.guardian_urls.splitlines() if line.strip()]
+        try:
+            with st.spinner("Reading the pages you listed…"):
+                report = bot.guardian.scan_and_repair(learn_urls=urls)
+            st.success(short_report(report))
+        except Exception as exc:  # noqa: BLE001
+            st.error(str(exc))
+
+
 def render_setup(bot) -> None:
     settings = bot.settings
     creds_ok = settings.credentials_path.is_file()
@@ -286,12 +335,14 @@ st.markdown(_CSS, unsafe_allow_html=True)
 st.title("Gmail Draft Assistant")
 st.markdown('<p class="hero-note">A simple local helper that drafts replies. You send them.</p>', unsafe_allow_html=True)
 
-home, drafts, knowledge, setup = st.tabs(["Home", "Drafts", "Knowledge", "Setup"])
+home, drafts, knowledge, health, setup = st.tabs(["Home", "Drafts", "Knowledge", "Health", "Setup"])
 with home:
     render_home(bot)
 with drafts:
     render_drafts(bot)
 with knowledge:
     render_knowledge(bot)
+with health:
+    render_health(bot)
 with setup:
     render_setup(bot)

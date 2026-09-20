@@ -8,6 +8,7 @@ A Chrome extension popup lets you add an optional website URL and draft notes, t
 
 - Optional Start / Pause / Stop polling of unread inbox mail
 - Chrome extension popup: optional website URL and description, then draft a reply for the open email only
+- Background Health checker: repairs local files, retries recoverable draft errors, and can index websites you list
 - Builds a local knowledge index from `data/knowledge/faqs.json`, markdown notes, and optional website URLs
 - Optionally matches tone using recent **Sent** mail as few-shot examples
 - Writes a Gmail **draft** in the same thread (`threadId` + `In-Reply-To` / `References`)

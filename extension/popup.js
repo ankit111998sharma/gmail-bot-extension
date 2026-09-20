@@ -54,8 +54,26 @@ async function refreshStatus() {
   }
   const email = health.connected_email || health.target_email || "Gmail";
   const ai = health.ai_ready ? "AI ready" : "AI optional";
-  status.textContent = `Connected: ${email} · ${ai}`;
+  const guard = health.guardian && (health.guardian.fixed || []).length ? " · auto-repair on" : "";
+  status.textContent = `Connected: ${email} · ${ai}${guard}`;
   status.classList.remove("is-error");
+}
+
+async function requestDraft(redraft) {
+  return send({
+    action: "draftFromPopup",
+    redraft: Boolean(redraft),
+    rulesUrl: (document.getElementById("website-url").value || "").trim(),
+    notes: (document.getElementById("draft-notes").value || "").trim(),
+  });
+}
+
+function shouldRetry(result) {
+  const error = ((result && result.error) || "").toLowerCase();
+  if (!error) {
+    return false;
+  }
+  return /label|timeout|refresh the gmail|not running|could not create|connection|quota/.test(error);
 }
 
 async function runDraft(redraft) {
@@ -63,12 +81,11 @@ async function runDraft(redraft) {
   showMessage(redraft ? "Fixing grammar and redrafting…" : "Writing your reply…");
   showPreview("");
   showSuggestions([]);
-  const result = await send({
-    action: "draftFromPopup",
-    redraft: Boolean(redraft),
-    rulesUrl: (document.getElementById("website-url").value || "").trim(),
-    notes: (document.getElementById("draft-notes").value || "").trim(),
-  });
+  let result = await requestDraft(redraft);
+  if (!(result && result.ok && (result.draftText || result.text)) && shouldRetry(result)) {
+    showMessage("Retrying…");
+    result = await requestDraft(redraft);
+  }
   setBusy(false);
   if (!(result && result.ok && (result.draftText || result.text))) {
     showMessage((result && result.error) || "Could not create a draft.", true);

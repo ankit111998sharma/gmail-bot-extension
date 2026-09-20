@@ -26,6 +26,12 @@ def same_email(left: str | None, right: str | None) -> bool:
     return bool(a and b and a == b)
 
 
+def _as_bool(value: str | None, default: bool) -> bool:
+    if value is None or str(value).strip() == "":
+        return default
+    return str(value).strip().lower() in {"1", "true", "yes", "on"}
+
+
 def _as_int(value: str | None, default: int) -> int:
     if value is None or value.strip() == "":
         return default
@@ -56,6 +62,8 @@ class Settings:
     local_api_port: int = 8787
     gemini_api_key: str = ""
     gemini_model: str = "gemini-2.0-flash"
+    guardian_enabled: bool = True
+    guardian_seconds: int = 45
 
     def ensure_dirs(self) -> None:
         self.credentials_path.parent.mkdir(parents=True, exist_ok=True)
@@ -109,6 +117,8 @@ def load_settings(project_root: Path | None = None) -> Settings:
         local_api_port=max(1024, _as_int(os.getenv("LOCAL_API_PORT"), 8787)),
         gemini_api_key=(os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY") or "").strip(),
         gemini_model=(os.getenv("GEMINI_MODEL") or "gemini-2.0-flash").strip() or "gemini-2.0-flash",
+        guardian_enabled=_as_bool(os.getenv("GUARDIAN_ENABLED"), True),
+        guardian_seconds=max(15, _as_int(os.getenv("GUARDIAN_SECONDS"), 45)),
     )
     settings.ensure_dirs()
     return settings

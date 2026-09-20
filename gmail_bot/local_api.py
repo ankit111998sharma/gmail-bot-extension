@@ -54,6 +54,7 @@ def make_handler(bot: InboxBot) -> type[BaseHTTPRequestHandler]:
                         "rules_url": bot.store.get_setting("rules_url"),
                         "ai_ready": bool(getattr(bot.settings, "gemini_api_key", ""))
                         or bot.settings.inbox_llm in {"gemini", "ollama"},
+                        "guardian": getattr(bot, "guardian", None).summary() if getattr(bot, "guardian", None) else {},
                     },
                 )
                 return

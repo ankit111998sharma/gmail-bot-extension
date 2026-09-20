@@ -211,6 +211,18 @@ class Store:
         self._conn.execute("DELETE FROM templates WHERE name = ?", (name,))
         self._conn.commit()
 
+    def list_failed_queue(self, limit: int = 5, max_attempts: int = 5) -> list[dict[str, Any]]:
+        rows = self._conn.execute(
+            """
+            SELECT * FROM draft_queue
+            WHERE status = 'failed' AND attempts < ?
+            ORDER BY updated_at DESC
+            LIMIT ?
+            """,
+            (max_attempts, limit),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
     def add_job_log(self, level: str, event: str, payload: str | None = None) -> None:
         self._conn.execute(
             "INSERT INTO job_log (ts, level, event, payload) VALUES (?, ?, ?, ?)",

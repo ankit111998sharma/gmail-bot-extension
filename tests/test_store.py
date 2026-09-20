@@ -25,3 +25,17 @@ def test_queue_and_processed_roundtrip(store: Store) -> None:
     assert store.list_templates()[0]["name"] == "thanks"
     store.set_setting("gmail_account", "ada@example.com")
     assert store.get_setting("gmail_account") == "ada@example.com"
+    store.upsert_queue(
+        {
+            "message_id": "m2",
+            "thread_id": "t2",
+            "sender": "b@x.com",
+            "subject": "Later",
+            "snippet": "later",
+            "status": "failed",
+            "attempts": 1,
+            "last_error": "labelId not found",
+        }
+    )
+    failed = store.list_failed_queue()
+    assert failed[0]["message_id"] == "m2"

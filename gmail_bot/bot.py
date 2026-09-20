@@ -8,6 +8,7 @@ from typing import Any
 from gmail_bot.config import Settings, load_settings, normalize_email, same_email
 from gmail_bot.draft_engine import generate_reply, topic_hint
 from gmail_bot.gmail_adapter import GmailAdapter, GmailPort, reply_recipient
+from gmail_bot.guardian import ProjectGuardian, is_retryable_draft_error
 from gmail_bot.llm import LlmPort, build_llm
 from gmail_bot.logging_setup import setup_logging
 from gmail_bot.models import BotStatus, ParsedMessage, RetrievedChunk, StyleExample, short_snippet
@@ -74,6 +75,9 @@ class InboxBot:
         self._fail_streak = 0
         self._style_cache: list[StyleExample] = []
         self._style_loaded = False
+        self.guardian = ProjectGuardian(self)
+        self._guardian_stop = threading.Event()
+        self._guardian_thread: threading.Thread | None = None
         saved_account = normalize_email(self.store.get_setting("gmail_account"))
         if saved_account:
             self.settings.gmail_account = saved_account
@@ -151,6 +155,48 @@ class InboxBot:
             )
         if profile:
             self.store.set_setting("connected_email", profile)
+
+    def start_guardian(self) -> None:
+        if not getattr(self.settings, "guardian_enabled", True):
+            return
+        with self._lock:
+            if self._guardian_thread and self._guardian_thread.is_alive():
+                return
+            self._guardian_stop = threading.Event()
+            self._guardian_thread = threading.Thread(
+                target=self._guardian_loop, name="project-guardian", daemon=True
+            )
+            self._guardian_thread.start()
+            logger.info("Project guardian started", extra={"event": "guardian_start"})
+
+    def stop_guardian(self) -> None:
+        self._guardian_stop.set()
+
+    def _guardian_loop(self) -> None:
+        interval = max(15, int(getattr(self.settings, "guardian_seconds", 45) or 45))
+        while not self._guardian_stop.wait(interval):
+            try:
+                self.guardian.scan_and_repair()
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("Guardian scan failed: %s", exc, extra={"event": "guardian_scan_failed"})
+
+    def retry_failed_drafts(self, limit: int = 3) -> int:
+        recovered = 0
+        for item in self.store.list_failed_queue(limit=limit):
+            error = item.get("last_error") or ""
+            if error and not is_retryable_draft_error(str(error)):
+                continue
+            try:
+                self.draft_from_open_mail(
+                    item.get("sender") or "",
+                    item.get("subject") or "",
+                    item.get("snippet") or "",
+                    existing_draft=item.get("draft_preview") or "",
+                )
+                recovered += 1
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("Could not retry draft: %s", exc, extra={"event": "guardian_retry_item_failed"})
+        return recovered
 
     def set_rules_url(self, url: str) -> str:
         cleaned = (url or "").strip()
@@ -569,4 +615,5 @@ def get_controller(settings: Settings | None = None) -> InboxBot:
     with _CONTROLLER_LOCK:
         if _CONTROLLER is None:
             _CONTROLLER = InboxBot(settings=settings)
+            _CONTROLLER.start_guardian()
         return _CONTROLLER
