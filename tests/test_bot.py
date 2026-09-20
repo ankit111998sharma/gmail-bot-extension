@@ -24,7 +24,9 @@ def test_process_creates_draft_and_label(settings: Settings, store) -> None:
     assert gmail.drafts[0]["thread_id"] == "t1"
     assert gmail.labels == [(message.message_id, settings.label_name)]
     assert store.already_processed(message.message_id)
-    assert "DRAFT" in gmail.drafts[0]["text"]
+    assert "DRAFT" not in gmail.drafts[0]["text"]
+    assert "knowledge base" not in gmail.drafts[0]["text"].lower()
+    assert "Office hours?" not in gmail.drafts[0]["text"]
     assert gmail.drafts[0]["from"] == "me@gmail.com"
     assert "ada@example.com" in gmail.drafts[0]["to"].lower()
     assert gmail.drafts[0]["from"] != gmail.drafts[0]["to"]

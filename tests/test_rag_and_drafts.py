@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from gmail_bot.draft_engine import generate_reply, placeholder_reply
+from gmail_bot.draft_engine import generate_reply, placeholder_reply, topic_hint
 from gmail_bot.llm import PlaceholderLlm
 from gmail_bot.models import RetrievedChunk
 from gmail_bot.rag import KnowledgeBase, chunk_text, tokenize
@@ -36,17 +36,49 @@ def test_faq_retrieval_and_placeholder_uses_answer(store, settings) -> None:
     assert draft.language == "en"
     assert "asharma" in draft.text
     assert "Ada" not in draft.text.split("Best regards")[-1]
+    assert "DRAFT" not in draft.text
+    assert "knowledge base" not in draft.text.lower()
+    assert "Office hours?" not in draft.text
 
 
 def test_hindi_placeholder_without_context() -> None:
     message = make_message(body="कृपया घंटे बताएं", subject="सहायता")
     text = placeholder_reply(message, [], "hi")
-    assert "DRAFT" in text
+    assert "नमस्ते" in text
     assert "धन्यवाद" in text
+    assert "DRAFT" not in text
 
 
 def test_missing_context_flag() -> None:
     message = make_message(body="What is the secret launch date?")
     draft = generate_reply(message, [], [], PlaceholderLlm())
     assert draft.missing_context is True
-    assert "follow up" in draft.text.lower()
+    assert "get back to you" in draft.text.lower()
+    assert "secret launch date" not in draft.text.lower()
+    assert "DRAFT" not in draft.text
+
+
+def test_placeholder_does_not_quote_sender_or_guidelines() -> None:
+    message = make_message(
+        subject="Re: Request to Reopen Fee Payment Link for Semester-III Internship Backlog",
+        body="Please reopen the fee payment link for my internship backlog.",
+    )
+    guidelines = RetrievedChunk(
+        source="guidelines.md",
+        text="# Reply guidelines\n- Never invent prices\n- Drafts are for human review.",
+        score=1.0,
+    )
+    stop_faq = RetrievedChunk(
+        source="faqs.json",
+        text="Q: How do I stop the bot?\nA: Use Stop bot in the dashboard.",
+        score=0.9,
+    )
+    text = placeholder_reply(message, [guidelines, stop_faq], "en", owner_name="asharma111998")
+    assert "DRAFT" not in text
+    assert "knowledge base" not in text.lower()
+    assert "Semester-III" not in text
+    assert "Please reopen the fee payment" not in text
+    assert "Stop bot" not in text
+    assert "Never invent" not in text
+    assert "Fee Payment" in text
+    assert topic_hint(message.subject) == "Reopen Fee Payment Link"

@@ -1,8 +1,68 @@
 from __future__ import annotations
 
+import re
+
 from gmail_bot.language import detect_language, language_name
 from gmail_bot.llm import LlmPort, PlaceholderLlm
 from gmail_bot.models import DraftResult, ParsedMessage, RetrievedChunk, StyleExample
+
+_PREFIX = re.compile(r"^\s*((re|fw|fwd)\s*:\s*)+", re.I)
+_STOP = {
+    "a",
+    "an",
+    "and",
+    "for",
+    "from",
+    "of",
+    "on",
+    "regarding",
+    "request",
+    "the",
+    "to",
+    "about",
+}
+
+
+def topic_hint(subject: str | None, limit: int = 4) -> str:
+    text = _PREFIX.sub("", subject or "").strip()
+    words = [w for w in re.findall(r"[A-Za-z0-9\u0900-\u097F]+", text) if w.lower() not in _STOP]
+    return " ".join(words[:limit])
+
+
+def _is_meta_chunk(chunk: RetrievedChunk) -> bool:
+    source = (chunk.source or "").lower()
+    text = (chunk.text or "").lower()
+    if "guideline" in source:
+        return True
+    return "never invent" in text or "drafts are for human review" in text or "how do i stop the bot" in text
+
+
+def _faq_answer(chunk: RetrievedChunk) -> str:
+    text = (chunk.text or "").strip()
+    if re.search(r"\bA:", text):
+        return text.split("A:", 1)[1].strip().split("\n")[0].strip()
+    if "answer:" in text.lower():
+        return re.split(r"answer:\s*", text, maxsplit=1, flags=re.I)[1].strip().split("\n")[0].strip()
+    return ""
+
+
+def useful_answers(message: ParsedMessage, chunks: list[RetrievedChunk]) -> list[str]:
+    blob = f"{message.subject}\n{message.body}".lower()
+    answers: list[str] = []
+    for chunk in chunks:
+        if _is_meta_chunk(chunk):
+            continue
+        answer = _faq_answer(chunk)
+        if not answer:
+            continue
+        tokens = [t.lower() for t in re.findall(r"[A-Za-z0-9\u0900-\u097F]{3,}", answer)]
+        if tokens and not any(token in blob for token in tokens[:8]):
+            question = (chunk.text or "").split("A:")[0].lower()
+            q_tokens = [t for t in re.findall(r"[A-Za-z0-9\u0900-\u097F]{4,}", question) if t not in _STOP]
+            if q_tokens and not any(token in blob for token in q_tokens[:6]):
+                continue
+        answers.append(answer)
+    return answers[:1]
 
 
 def build_prompt(
@@ -17,30 +77,27 @@ def build_prompt(
     style_block = "\n\n".join(
         f"Example {i}:\nSubject: {ex.subject}\n{ex.body}" for i, ex in enumerate(examples[:8], start=1)
     ) or "(No sent-mail examples yet.)"
-    context_block = "\n\n".join(
-        f"[{chunk.source} | score={chunk.score:.3f}]\n{chunk.text}" for chunk in chunks
-    ) or "(No knowledge chunks retrieved.)"
-    return f"""You are {assistant_name} ({owner_email or "the inbox owner"}).
-You are the RECIPIENT of the incoming email. Write a first-person reply FROM you TO the incoming sender.
-Do not write as the incoming sender. Do not write as a third-party bot, assistant, or someone else.
-The draft From address is {owner_email or "the inbox owner"}. The To address is the original sender.
-Write a draft reply in {language_name(language)}.
-Match the tone, formatting, and language of YOUR sent-mail examples.
-Answer every question in the incoming email using ONLY the knowledge context.
-If the knowledge context does not contain the answer, say so politely and promise a follow-up.
-Sign off as {assistant_name}. Output ONLY the email body. Do not invent prices, dates, or policies.
+    answers = useful_answers(message, chunks)
+    context_block = "\n".join(answers) or "(No matching FAQ answer. Send a short follow-up promise only.)"
+    hint = topic_hint(message.subject) or "this"
+    return f"""You are {assistant_name} ({owner_email or "the inbox owner"}), the recipient.
+Write a short first-person reply FROM you TO the sender.
+Rules:
+- 2 to 4 short sentences. No subject line.
+- Do not quote, paste, or repeat the incoming email.
+- You may mention at most a few words of the topic, such as: {hint}
+- Do not paste knowledge-base text, guidelines, FAQs, or disclaimers.
+- If a matching fact is provided below, use it in your own words. Otherwise say you will check and reply.
+- Do not write [DRAFT], "review before sending", or "knowledge base".
+- Sign off as {assistant_name} only.
 
-Sent-mail style examples:
+Your sent-mail style:
 {style_block}
 
-Knowledge context:
+Matching fact (do not paste verbatim unless it is a short answer):
 {context_block}
 
-Incoming email
-From: {message.sender}
-Subject: {message.subject}
-
-{message.body}
+Write the reply in {language_name(language)}.
 """
 
 
@@ -52,43 +109,29 @@ def placeholder_reply(
     owner_name: str = "",
     owner_email: str = "",
 ) -> str:
-    subject = message.subject or "(No Subject)"
     signoff = owner_name or owner_email or "Me"
+    hint = topic_hint(message.subject)
+    answers = useful_answers(message, chunks)
     if language == "hi":
-        if chunks:
-            facts = "\n".join(f"- {chunk.text[:400]}" for chunk in chunks[:3])
+        if answers:
+            body = answers[0]
+            return f"नमस्ते,\n\n{body}\n\nधन्यवाद,\n{signoff}"
+        if hint:
             return (
-                f"[DRAFT — भेजने से पहले जाँचें]\n\n"
                 f"नमस्ते,\n\n"
-                f"आपके संदेश \"{subject}\" के लिए धन्यवाद।\n\n"
-                f"हमारे ज्ञान आधार से संबंधित जानकारी:\n{facts}\n\n"
-                f"कृपया इस ड्राफ्ट को जाँच कर भेजें।\n\n"
+                f"{hint} के बारे में आपका संदेश मिल गया है। मैं जाँच कर जल्द उत्तर दूँगा।\n\n"
                 f"धन्यवाद,\n{signoff}"
             )
+        return f"नमस्ते,\n\nआपका संदेश मिल गया है। मैं जाँच कर जल्द उत्तर दूँगा।\n\nधन्यवाद,\n{signoff}"
+    if answers:
+        return f"Hello,\n\n{answers[0]}\n\nBest regards,\n{signoff}"
+    if hint:
         return (
-            f"[DRAFT — भेजने से पहले जाँचें]\n\n"
-            f"नमस्ते,\n\n"
-            f"आपके संदेश \"{subject}\" के लिए धन्यवाद। "
-            f"हम विवरण की समीक्षा कर रहे हैं और जल्द ही अपडेट देंगे।\n\n"
-            f"धन्यवाद,\n{signoff}"
-        )
-    if chunks:
-        facts = "\n".join(f"- {chunk.text[:400]}" for chunk in chunks[:3])
-        return (
-            f"[DRAFT — review before sending]\n\n"
             f"Hello,\n\n"
-            f'Thank you for your message about "{subject}".\n\n'
-            f"Relevant information from our knowledge base:\n{facts}\n\n"
-            f"Please review this draft and send it manually if it looks correct.\n\n"
+            f"I have noted your message about {hint}. I will check this and get back to you.\n\n"
             f"Best regards,\n{signoff}"
         )
-    return (
-        f"[DRAFT — review before sending]\n\n"
-        f"Hello,\n\n"
-        f'Thank you for reaching out about "{subject}". '
-        f"We are reviewing the details and will follow up shortly.\n\n"
-        f"Best regards,\n{signoff}"
-    )
+    return f"Hello,\n\nI have received your message. I will check this and get back to you.\n\nBest regards,\n{signoff}"
 
 
 def generate_reply(
@@ -101,7 +144,8 @@ def generate_reply(
     owner_email: str = "",
 ) -> DraftResult:
     language = detect_language(message.body or message.subject)
-    missing = not chunks
+    answers = useful_answers(message, chunks)
+    missing = not answers
     owner_name = assistant_name
     if isinstance(llm, PlaceholderLlm) or getattr(llm, "name", "") == "placeholder":
         text = placeholder_reply(
