@@ -66,6 +66,25 @@ def test_draft_payload_threads_and_headers() -> None:
     assert b"Content-Type:" in raw
 
 
+def test_draft_payload_drops_quoted_thread_text() -> None:
+    message = make_message()
+    payload = build_draft_payload(
+        message,
+        "Please reopen the fee payment link.\n\n> > > Thanks & regards,\n> Support Team\n"
+        "> On Mon, 14 Sep at 2:39 PM, University Learner <\n"
+        "> support@onlinedegree.freshdesk.com> wrote:\n",
+        from_email="me@gmail.com",
+    )
+    raw = base64.urlsafe_b64decode(payload["message"]["raw"].encode("ascii"))
+    parsed = message_from_bytes(raw, policy=email_policy.default)
+    body = parsed.get_content()
+    assert "Please reopen the fee payment link." in body
+    assert "Support Team" not in body
+    assert "Freshdesk" not in body
+    assert "wrote:" not in body.lower()
+    assert ">" not in body
+
+
 def test_normalize_gmail_web_compose_draft_id() -> None:
     from gmail_bot.gmail_adapter import normalize_gmail_draft_id
 

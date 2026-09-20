@@ -47,8 +47,90 @@ def _faq_answer(chunk: RetrievedChunk) -> str:
     return ""
 
 
+_INVISIBLE = dict.fromkeys(map(ord, "\u200b\u200c\u200d\ufeff\xa0"), " ")
+_QUOTE_PREFIX = re.compile(r"^(>\s*)+")
+_QUOTE_HEADER = re.compile(
+    r"(?is)(?:^|\n|[>\s]{2,})(?:\s*>+\s*)*On\s+"
+    r"(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun|Sunday|Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|"
+    r"Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Sept|Oct|Nov|Dec)\b"
+    r".{0,220}?\bwrote\s*:"
+)
+_DAYS = r"(mon|tue|tues|wed|thu|thur|thurs|fri|sat|sun|monday|tuesday|wednesday|thursday|friday|saturday|sunday)"
+
+
 def _norm(text: str | None) -> str:
-    return " ".join((text or "").lower().split())
+    cleaned = (text or "").translate(_INVISIBLE)
+    return " ".join(cleaned.lower().split())
+
+
+def _unquote_line(line: str) -> str:
+    return _QUOTE_PREFIX.sub("", (line or "").strip()).strip()
+
+
+def _is_only_foreign_signoff(text: str) -> bool:
+    leftover = _norm(text)
+    leftover = re.sub(
+        r"thanks\s*(and|&)\s*regards|best regards|kind regards|regards|sincerely|"
+        r"support team|university learner|sent from my \w+",
+        " ",
+        leftover,
+        flags=re.I,
+    )
+    leftover = re.sub(r"[^\w\u0900-\u097F]+", " ", leftover)
+    return not leftover.strip()
+
+
+def is_quote_boundary(line: str) -> bool:
+    """True when this line starts a Gmail/Outlook quoted thread, not the user's draft."""
+    raw = (line or "").strip()
+    if raw.startswith(">"):
+        return True
+    text = _unquote_line(raw)
+    if not text:
+        return False
+    lower = text.lower()
+    if lower in {"--"} or re.fullmatch(r"-{5,} forwarded message -{5,}", lower):
+        return True
+    if lower.startswith("begin forwarded message"):
+        return True
+    if re.match(r"-{2,} ?original message ?-{2,}", lower):
+        return True
+    if re.match(r"^on\s+.+\bwrote:\s*$", text, re.I) and re.search(
+        r"\b(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec|\d{4}|at\s+\d{1,2}:\d{2})\b",
+        text,
+        re.I,
+    ):
+        return True
+    if re.match(rf"^on\s+{_DAYS}\b", text, re.I) and (
+        "<" in text
+        or "@" in text
+        or re.search(r"\b(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec|\d{4}|at\s+\d{1,2}:\d{2})\b", text, re.I)
+    ):
+        return True
+    if "@" in text and re.search(r"\bwrote:\s*$", text, re.I):
+        return True
+    return False
+
+
+def strip_quoted_reply(text: str) -> str:
+    """Keep the user's draft body, not the quoted thread underneath."""
+    raw = (text or "").translate(_INVISIBLE).replace("\r\n", "\n")
+    raw = _QUOTE_HEADER.split(raw, maxsplit=1)[0]
+    raw = re.split(
+        r"(?i)(?:^|\n)\s*(?:-+\s*forwarded message\s*-+|begin forwarded message)",
+        raw,
+        maxsplit=1,
+    )[0]
+    kept: list[str] = []
+    for line in raw.split("\n"):
+        if is_quote_boundary(line):
+            break
+        kept.append(_QUOTE_PREFIX.sub("", line).rstrip())
+    cleaned = "\n".join(kept).strip()
+    cleaned = re.sub(r"(?m)^\s*>.*$", "", cleaned).strip()
+    if _is_only_foreign_signoff(cleaned):
+        return ""
+    return cleaned
 
 
 def relevant_sent_line(examples: list[StyleExample], hint: str, incoming: str = "") -> str:
@@ -101,25 +183,6 @@ _SIGNOFF = re.compile(
     r"\n+(Best regards|Thanks & regards|Thanks|Thank you|Regards|Sincerely|धन्यवाद),?\s*\n",
     re.I,
 )
-
-
-def strip_quoted_reply(text: str) -> str:
-    """Keep the user's draft body, not the quoted thread underneath."""
-    kept: list[str] = []
-    for line in (text or "").replace("\r\n", "\n").split("\n"):
-        stripped = line.strip()
-        if re.match(r"^On .+wrote:\s*$", stripped, re.I):
-            break
-        if re.match(r"^On .{10,140}$", stripped, re.I) and "wrote:" not in stripped.lower():
-            break
-        if stripped.startswith(">"):
-            continue
-        if stripped in {"--", "---------- Forwarded message ----------"}:
-            break
-        if stripped.lower().startswith("begin forwarded message"):
-            break
-        kept.append(line)
-    return "\n".join(kept).strip()
 
 
 def usable_existing_draft(existing: str, incoming: str = "") -> str:
@@ -219,6 +282,7 @@ def _strip_letter_shell(text: str) -> str:
 def polish_professional(text: str, *, owner_name: str, sender: str = "", language: str = "en") -> str:
     """Keep the meaning, but present the draft as a short professional email."""
     cleaned = correct_grammar(strip_quoted_reply(text))
+    cleaned = strip_quoted_reply(cleaned)
     body = _strip_letter_shell(cleaned)
     body = re.sub(r"^(hi|hello|hey)[.!]\s+", "", body, flags=re.I).strip()
     if not body:
@@ -367,6 +431,7 @@ Rules:
 - If an existing draft is provided, improve that draft. Keep the same request. Fix grammar and tone.
 - Write as yourself. Never write on behalf of {message.sender or "the sender"}.
 - Do not quote, paste, or repeat the other person's words.
+- Never include quoted thread text, lines starting with >, "On ... wrote:", Freshdesk headers, or "Support Team" signatures from earlier messages.
 - You may mention the topic in a few words, such as: {hint}
 - Reuse facts and tone from YOUR earlier sent emails below. Those are messages you already wrote.
 - If a website summary is provided, use it for facts. Do not paste the whole page.
@@ -469,6 +534,7 @@ def generate_reply(
 ) -> DraftResult:
     rules = rules or []
     notes = (notes or "").strip()
+    existing_draft = strip_quoted_reply(existing_draft)
     language = detect_language(existing_draft or notes or message.body or message.subject)
     answers = useful_answers(message, chunks)
     missing = not answers and not rules and not notes
@@ -493,6 +559,7 @@ def generate_reply(
             text = polish_professional(
                 text, owner_name=owner_name, sender=message.sender, language=language
             )
+            text = strip_quoted_reply(text)
             return DraftResult(
                 text=text.strip(),
                 engine=getattr(llm, "name", "llm"),
@@ -532,6 +599,7 @@ def generate_reply(
         )
         engine = "placeholder"
     text = polish_professional(text, owner_name=owner_name, sender=message.sender, language=language)
+    text = strip_quoted_reply(text)
     return DraftResult(
         text=text.strip(),
         engine=engine,

@@ -38,5 +38,6 @@ def test_extension_popup_shows_optional_url_and_notes() -> None:
     assert "gmail_quote" in content
     assert "stripQuotedText" in content
     assert "composeBodyText" in content
+    assert "removeQuotedBlocks" in content
     assert "gmail-bot-mode-compose" in content
-    assert "1.5.2" in manifest
+    assert "1.5.3" in manifest

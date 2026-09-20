@@ -199,7 +199,10 @@ def build_draft_payload(
             msg["References"] = (
                 f"{references} {message.message_id_header}".strip() if references else message.message_id_header
             )
-    msg.set_content(reply_text or "", subtype="plain", charset="utf-8")
+    from gmail_bot.draft_engine import strip_quoted_reply
+
+    clean_text = strip_quoted_reply(reply_text)
+    msg.set_content(clean_text or "", subtype="plain", charset="utf-8")
     payload_message: dict[str, Any] = {"raw": encode_rfc2822_raw(msg.as_bytes(policy=SMTP))}
     thread_id = (message.thread_id or "").strip()
     if thread_id:

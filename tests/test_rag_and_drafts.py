@@ -126,6 +126,53 @@ def test_correct_grammar_and_strip_quoted_thread() -> None:
     assert "Please confirm" in text
 
 
+def test_strip_gmail_angle_quote_thread() -> None:
+    blob = (
+        "Dear Rachana,\n\nPlease reopen the fee payment link.\n\nBest regards,\nAnkit\n\n"
+        "> > > Thanks & regards,\n"
+        "> Support Team\n"
+        ">\n"
+        "> On Mon, 14 Sep at 2:39 PM, University Learner <\n"
+        "> support@onlinedegree. Freshdesk. Com> wrote:\n"
+        "> Please help with the fee link.\n"
+    )
+    cleaned = strip_quoted_reply(blob)
+    assert "Support Team" not in cleaned
+    assert "Freshdesk" not in cleaned
+    assert "wrote:" not in cleaned.lower()
+    assert ">" not in cleaned
+    assert "Please reopen the fee payment link." in cleaned
+
+    quoted_only = (
+        "> > > Thanks & regards,\n"
+        "> Support Team\n"
+        ">\n"
+        "> On Mon, 14 Sep at 2:39 PM, University Learner <\n"
+        "> support@onlinedegree. Freshdesk. Com> wrote:\n"
+    )
+    assert strip_quoted_reply(quoted_only) == ""
+    drafted = generate_reply(
+        make_message(
+            sender="Support Team <support@onlinedegree.freshdesk.com>",
+            subject="Re: Request to Reopen Fee Payment Link",
+            body="As discussed on call, I hope the issue has been resolved.",
+        ),
+        [],
+        [],
+        PlaceholderLlm(),
+        assistant_name="Ankit",
+        owner_email="me@gmail.com",
+        existing_draft=quoted_only,
+    )
+    text = drafted.text
+    assert ">" not in text
+    assert "wrote:" not in text.lower()
+    assert "support@onlinedegree" not in text.lower()
+    assert "Freshdesk" not in text
+    assert "Support Team" not in text
+    assert "Best regards" in text
+
+
 def test_usable_existing_draft_ignores_incoming_and_quoted_thread() -> None:
     incoming = "As discussed on call, I hope the issue has been resolved."
     assert usable_existing_draft(incoming, incoming) == ""

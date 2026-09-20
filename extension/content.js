@@ -41,9 +41,15 @@ function isDraftsView() {
   return /#drafts\b/i.test(location.hash || "") || /\/drafts/i.test(location.pathname || "");
 }
 
+function composeRoot() {
+  const box = findComposeBox();
+  return box?.closest(".AD, .aoI, .M9, .aO7, .ip, [role='dialog']") || box || null;
+}
+
 function readComposeTo() {
+  const root = composeRoot() || document;
   const chips = [
-    ...document.querySelectorAll('.vR span[email], .afx span[email], div[data-hovercard-id][email], span[email]'),
+    ...root.querySelectorAll('.vR span[email], .afx span[email], form span[email], [name="to"] span[email]'),
   ];
   const emails = [];
   chips.forEach((el) => {
@@ -55,7 +61,7 @@ function readComposeTo() {
   if (emails.length) {
     return emails.join(", ");
   }
-  const input = document.querySelector(
+  const input = root.querySelector(
     'textarea[name="to"], input[name="to"], input[aria-label="To recipients"], input[peoplekit-id], input[aria-label="To"]'
   );
   return (input?.value || "").trim();
@@ -199,28 +205,48 @@ function findComposeBox() {
 }
 
 function stripQuotedText(text) {
-  const lines = String(text || "").replace(/\r\n/g, "\n").split("\n");
+  let raw = String(text || "").replace(/\r\n/g, "\n").replace(/[\u200b\u200c\u200d\ufeff]/g, "");
+  raw = raw.split(
+    /(?:^|\n|[>\s]{2,})(?:\s*>+\s*)*On\s+(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun)[a-z]*\s*,[\s\S]{0,220}?\bwrote\s*:/i
+  )[0];
+  raw = raw.split(/(?:^|\n)\s*(?:-+\s*forwarded message\s*-+|begin forwarded message)/i)[0];
+  const lines = raw.split("\n");
   const kept = [];
   for (const line of lines) {
     const stripped = line.trim();
-    if (/^On .+wrote:\s*$/i.test(stripped)) {
-      break;
-    }
-    if (/^On .{10,140}$/i.test(stripped) && !/wrote:/i.test(stripped)) {
-      break;
-    }
+    const unquoted = stripped.replace(/^(>\s*)+/, "").trim();
     if (stripped.startsWith(">")) {
-      continue;
-    }
-    if (stripped === "--" || /^-+ forwarded message -+$/i.test(stripped)) {
       break;
     }
-    if (/^begin forwarded message/i.test(stripped)) {
+    if (/^On\s+(Mon|Tue|Wed|Thu|Fri|Sat|Sun)/i.test(unquoted) && /wrote:|<|@|at\s+\d{1,2}:\d{2}|\d{4}/i.test(unquoted)) {
       break;
     }
-    kept.push(line);
+    if (/^On\s+.+\bwrote:\s*$/i.test(unquoted) && /(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec|\d{4}|at\s+\d{1,2}:\d{2})/i.test(unquoted)) {
+      break;
+    }
+    if (stripped === "--" || /^-+ forwarded message -+$/i.test(unquoted)) {
+      break;
+    }
+    if (/^begin forwarded message/i.test(unquoted)) {
+      break;
+    }
+    if (/@/.test(unquoted) && /\bwrote:\s*$/i.test(unquoted)) {
+      break;
+    }
+    kept.push(line.replace(/^(>\s*)+/, ""));
   }
   return kept.join("\n").trim();
+}
+
+function quoteSelector() {
+  return ".gmail_quote, .gmail_quote_container, .gmail_extra, .gmail_signature, blockquote.gmail_quote, [class*='gmail_quote']";
+}
+
+function removeQuotedBlocks(box) {
+  if (!box) {
+    return;
+  }
+  box.querySelectorAll(quoteSelector()).forEach((el) => el.remove());
 }
 
 function composeBodyText(box) {
@@ -228,9 +254,7 @@ function composeBodyText(box) {
     return "";
   }
   const copy = box.cloneNode(true);
-  copy.querySelectorAll(
-    ".gmail_quote, .gmail_quote_container, .gmail_extra, .gmail_signature, blockquote"
-  ).forEach((el) => el.remove());
+  copy.querySelectorAll(quoteSelector()).forEach((el) => el.remove());
   return stripQuotedText(copy.innerText || copy.textContent || "");
 }
 
@@ -434,21 +458,21 @@ function gmailBodyHtml(text) {
 
 function insertReply(box, text) {
   const doc = box.ownerDocument || document;
-  const quotes = [...box.querySelectorAll(".gmail_quote, .gmail_quote_container")];
-  quotes.forEach((el) => el.remove());
+  const clean = stripQuotedText(text);
+  removeQuotedBlocks(box);
   selectEditor(box);
   doc.execCommand("selectAll", false, null);
-  const inserted = doc.execCommand("insertText", false, text);
-  if (!inserted || !hasDraftText(box, text)) {
+  const inserted = doc.execCommand("insertText", false, clean);
+  if (!inserted || !hasDraftText(box, clean)) {
     selectEditor(box);
     doc.execCommand("selectAll", false, null);
-    doc.execCommand("insertHTML", false, gmailBodyHtml(text) || "<div><br></div>");
+    doc.execCommand("insertHTML", false, gmailBodyHtml(clean) || "<div><br></div>");
   }
-  if (!hasDraftText(box, text)) {
+  if (!hasDraftText(box, clean)) {
     try {
       const data = new DataTransfer();
-      data.setData("text/plain", text);
-      data.setData("text/html", gmailBodyHtml(text));
+      data.setData("text/plain", clean);
+      data.setData("text/html", gmailBodyHtml(clean));
       box.dispatchEvent(
         new ClipboardEvent("paste", { clipboardData: data, bubbles: true, cancelable: true })
       );
@@ -456,12 +480,12 @@ function insertReply(box, text) {
       /* Gmail may block synthetic paste; other methods still apply. */
     }
   }
-  if (!hasDraftText(box, text)) {
-    box.innerHTML = gmailBodyHtml(text) || "<div><br></div>";
+  if (!hasDraftText(box, clean)) {
+    box.innerHTML = gmailBodyHtml(clean) || "<div><br></div>";
   }
-  if (!hasDraftText(box, text)) {
+  if (!hasDraftText(box, clean)) {
     box.textContent = "";
-    String(text || "")
+    String(clean || "")
       .split("\n")
       .forEach((line, index) => {
         if (index) {
@@ -470,9 +494,9 @@ function insertReply(box, text) {
         box.appendChild(doc.createTextNode(line));
       });
   }
-  quotes.forEach((el) => box.appendChild(el));
+  removeQuotedBlocks(box);
   box.dispatchEvent(
-    new InputEvent("input", { bubbles: true, cancelable: true, inputType: "insertFromPaste", data: text })
+    new InputEvent("input", { bubbles: true, cancelable: true, inputType: "insertFromPaste", data: clean })
   );
   box.dispatchEvent(new Event("change", { bubbles: true }));
   box.dispatchEvent(new KeyboardEvent("keyup", { bubbles: true, key: "End" }));
@@ -499,6 +523,7 @@ async function keepDraftVisible(text) {
   while (Date.now() < deadline) {
     const box = findComposeBox();
     if (box) {
+      removeQuotedBlocks(box);
       if (hasDraftText(box, text)) {
         placed = true;
       } else {
