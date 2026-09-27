@@ -1,59 +1,71 @@
 # Gmail Draft Assistant
 
-Standalone local app that reads Gmail, drafts replies in your thread, and **never sends** mail. Copy this folder to another computer and it keeps working (venv is created by `run.bat` / `run.sh`).
+A portable local app plus a Chrome extension that reads Gmail, drafts replies in the same thread, and **never sends** mail.
 
-A Chrome extension popup lets you add an optional website URL and draft notes, then create a reply. Drafts are created **only when you click Draft reply**.
+Copyright © Ankit Sharma.
 
-## What it does
+## About this project
 
-- Optional Start / Pause / Stop polling of unread inbox mail
-- Chrome extension popup: optional website URL and description, then draft a reply for the open email only
-- Background Health checker: repairs local files, retries recoverable draft errors, and can index websites you list
-- Builds a local knowledge index from `data/knowledge/faqs.json`, markdown notes, and optional website URLs
-- Optionally matches tone using recent **Sent** mail as few-shot examples
-- Writes a Gmail **draft** in the same thread (`threadId` + `In-Reply-To` / `References`)
-- Labels the original message `GmailBot-Drafted`
-- Leaves the message **unread** so you can still see it
-- Never calls `messages.send`
+Gmail Draft Assistant watches your inbox (or drafts only when you click in the extension), builds a local knowledge index from FAQs, notes, and optional website URLs, and writes a Gmail **draft**. You review and send in Gmail yourself. The original message stays unread and is labeled `GmailBot-Drafted` so it is not drafted twice by accident.
 
-## One-click start
+Copy the whole folder to another computer; `run.bat` / `run.sh` can create the virtual environment there.
 
-Windows:
+## Purpose
+
+- Speed up email replies with a first draft that matches your notes and optional site copy.
+- Keep a human in control: drafts only, never `messages.send`.
+- Work from Gmail in the browser via a small Chrome extension, or from a Streamlit home screen.
+
+## How it works
+
+1. You enable the Gmail API in Google Cloud, create a Desktop OAuth client, and save it as `data/gmail/credentials.json`.
+2. `python -m gmail_bot auth` (or **Connect this Gmail** on the Home screen) writes `data/gmail/token.json`.
+3. Optional: Start / Pause / Stop polling of unread inbox mail from Streamlit. A health checker can repair local files, retry recoverable draft errors, and index listed websites.
+4. Knowledge comes from `data/knowledge/faqs.json`, markdown notes, and URLs you ingest. Optional few-shot tone comes from recent **Sent** mail.
+5. Drafts are created with the same `threadId` and `In-Reply-To` / `References` headers. The Chrome popup can add a website URL and draft notes; a reply is created **only when you click Draft reply**.
+6. Default `INBOX_LLM=placeholder` injects FAQ hits into a labeled draft. You can point `INBOX_LLM=ollama` at a local model instead.
+
+Scope used: `https://www.googleapis.com/auth/gmail.modify` (needed for a custom label). The bot still never sends.
+
+## Advantages
+
+- Safe default: drafts only; unread stays unread.
+- Portable: credentials stay in this folder (gitignored) and travel with a copy of the project.
+- Extension drafts the open email only, so you are not bulk-replying the whole inbox by accident.
+- Logs store sender, subject, and snippet, not full bodies.
+- Tests use a fake Gmail client and never touch a live inbox.
+
+## Technologies
+
+| Area | Choice |
+| --- | --- |
+| Language | Python 3.11+ |
+| UI | Streamlit |
+| Gmail | Google API Python client, OAuth (Desktop) |
+| Extension | Chrome Manifest V3 (JavaScript) |
+| Knowledge / fetch | BeautifulSoup, requests, httpx |
+| Config | python-dotenv |
+| Optional LLM | Ollama (`llama3` or another local model) |
+| Tests | pytest |
+
+## How to run this project
+
+### One-click (Windows)
 
 ```bat
 run.bat
 ```
 
-macOS / Linux:
+### macOS / Linux
 
 ```bash
 chmod +x run.sh
 ./run.sh
 ```
 
-Then open the URL Streamlit prints (usually http://127.0.0.1:8501).
+Then open the URL Streamlit prints (usually [http://127.0.0.1:8501](http://127.0.0.1:8501)).
 
-## Chrome extension (click to draft)
-
-Keep `run.bat` running, then load the helper in Chrome:
-
-1. Open `chrome://extensions`
-2. Turn on **Developer mode**
-3. Click **Load unpacked**
-4. Select `d:\Cursor ai projects\gmail bot extension\extension`
-5. Pin **Gmail Draft Bot**
-6. Open [Gmail](https://mail.google.com/mail/u/0/#inbox), open an email, click the extension icon
-7. Optionally paste a website URL and/or a description, then click **Draft reply**. Leave both blank to skip them.
-
-The bot does not draft until you click **Draft reply**. Review the draft in Gmail; it never sends.
-
-## One-time Gmail setup (you must do this)
-
-1. [Google Cloud Console](https://console.cloud.google.com/) → create a project → enable **Gmail API**.
-2. OAuth consent screen (External is fine for a personal Gmail). Add yourself as a test user.
-3. Scope: `https://www.googleapis.com/auth/gmail.modify` (needed for a custom label; the bot still never sends).
-4. Credentials → OAuth client ID → **Desktop app** → download JSON as `data/gmail/credentials.json`.
-5. From this folder:
+### Manual
 
 ```bash
 python -m venv .venv
@@ -62,11 +74,18 @@ pip install -r requirements.txt
 python -m gmail_bot auth
 ```
 
-That writes `data/gmail/token.json`. Both JSON files stay in this folder and are gitignored. Publishing the OAuth app is not required for your own account.
+Place OAuth JSON at `data/gmail/credentials.json` before auth.
 
-You can also type the Gmail address on the Home screen and click **Connect this Gmail**. The bot only uses that inbox. To switch accounts, enter the new address and connect again.
+### Chrome extension
 
-## CLI
+Keep the app running, then:
+
+1. Open `chrome://extensions`
+2. Turn on **Developer mode**
+3. **Load unpacked** and select the `extension` folder in this project
+4. Open Gmail, open an email, click **Gmail Draft Bot**, optionally add a URL or notes, then **Draft reply**
+
+### CLI
 
 ```bash
 python -m gmail_bot auth
@@ -76,11 +95,9 @@ python -m gmail_bot inbox
 python -m gmail_bot status
 ```
 
-## LLM
+### Optional local LLM
 
-Default `INBOX_LLM=placeholder` still injects FAQ hits into a clearly labeled draft.
-
-To use a local model, install [Ollama](https://ollama.com), pull `llama3`, then set in `.env`:
+Install [Ollama](https://ollama.com), pull a model, then in `.env`:
 
 ```
 INBOX_LLM=ollama
@@ -88,17 +105,4 @@ OLLAMA_HOST=http://127.0.0.1:11434
 OLLAMA_MODEL=llama3
 ```
 
-## Portable copy
-
-Copy the whole project folder (including `data/gmail/token.json` if you already signed in). On the new PC run `run.bat` or `run.sh`. Python 3.11+ must be installed. Optional PyInstaller bundle:
-
-```bat
-scripts\build_portable.bat
-```
-
-## Safety
-
-- Drafts only
-- Unread stays unread
-- Logs store sender/subject/snippet, not full bodies
-- Automated tests use a fake Gmail client and never touch a live inbox
+Copyright © Ankit Sharma.
